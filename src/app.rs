@@ -258,24 +258,53 @@ impl GraalHaxApp {
             bytecode.len()
         )));
 
-        // Spawn a background thread to handle injection (async operation)
-        let bytecode_clone = bytecode.clone();
-        std::thread::spawn(move || {
-            // Create a new tokio runtime for this thread
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                let injector = FridaInjector::new(frida_client_type);
-                let result = injector.inject(&bytecode_clone, &frida_client_type.default_variable_name()).await;
-                // In a real implementation, we'd send this result back to the main thread
-                match result {
-                    Ok(msg) => eprintln!("Injection success: {}", msg),
-                    Err(e) => eprintln!("Injection error: {}", e),
-                }
-            });
-        });
+        // Convert bytecode to hex
+        use frida_bridge::bytecode_to_hex;
+        let hex = bytecode_to_hex(&bytecode);
 
-        // For now, just log that injection was initiated
-        self.add_log(LogEntry::info("Injection initiated (check console for details)"));
+        // Generate the Frida script
+        let injector = FridaInjector::new(frida_client_type);
+        let script = injector.generate_injection_script(&hex, frida_client_type.default_variable_name());
+
+        // Write script to temp file
+        let temp_dir = std::env::temp_dir();
+        let script_path = temp_dir.join("graalhax_inject.js");
+
+        if let Err(e) = std::fs::write(&script_path, script) {
+            self.add_log(LogEntry::error(format!("Failed to write script: {}", e)));
+            return;
+        }
+
+        // Run frida CLI directly (synchronous, no threading issues)
+        let target = self.client_type.target_process();
+        match std::process::Command::new("frida")
+            .arg("-l")
+            .arg(&script_path)
+            .arg(target)
+            .arg("--exit-on-error")
+            .output()
+        {
+            Ok(result) => {
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                let stderr = String::from_utf8_lossy(&result.stderr);
+
+                if result.status.success() {
+                    self.add_log(LogEntry::success("Injection successful!"));
+                    if !stdout.is_empty() {
+                        self.add_log(LogEntry::info(stdout.to_string()));
+                    }
+                } else {
+                    self.add_log(LogEntry::error(format!("Injection failed: {}", stderr)));
+                }
+            }
+            Err(e) => {
+                self.add_log(LogEntry::error(format!("Failed to run Frida: {}", e)));
+                self.add_log(LogEntry::info("Make sure Frida is installed and in PATH"));
+            }
+        }
+
+        // Clean up temp script
+        let _ = std::fs::remove_file(&script_path);
     }
 
     fn toggle_client(&mut self) {
@@ -288,10 +317,46 @@ impl GraalHaxApp {
             self.client_type.name()
         )));
     }
+
+    fn check_frida_available(&mut self) -> bool {
+        match std::process::Command::new("frida")
+            .arg("--version")
+            .output()
+        {
+            Ok(output) => output.status.success(),
+            Err(_) => false,
+        }
+    }
+
+    fn check_process_running(&mut self) -> bool {
+        let target = self.client_type.target_process();
+        match std::process::Command::new("frida-ps")
+            .output()
+        {
+            Ok(output) => {
+                if !output.status.success() {
+                    return false;
+                }
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // Check if target process is in the list
+                stdout.lines().any(|line| line.contains(target))
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn update_status(&mut self) {
+        self.frida_available = self.check_frida_available();
+        self.process_running = self.check_process_running();
+    }
 }
 
 impl eframe::App for GraalHaxApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Update status every second
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        self.update_status();
+
         // Handle keyboard shortcuts
         ctx.input_mut(|i| {
             if i.consume_key(egui::Modifiers::COMMAND, egui::Key::S) {
