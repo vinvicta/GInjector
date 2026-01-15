@@ -245,7 +245,7 @@ impl App {
             KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_client_type();
             }
-            KeyCode::Char('i') => {
+            KeyCode::Char('i') | KeyCode::Enter => {
                 self.mode = EditorMode::Insert;
                 self.status_message = "INSERT MODE".to_string();
             }
@@ -253,16 +253,17 @@ impl App {
                 self.show_input = true;
                 self.input_buffer = ":".to_string();
             }
-            KeyCode::Char('k') => {
+            // Arrow key navigation
+            KeyCode::Up => {
                 self.move_cursor(-1, 0);
             }
-            KeyCode::Char('j') => {
+            KeyCode::Down => {
                 self.move_cursor(1, 0);
             }
-            KeyCode::Char('h') => {
+            KeyCode::Left => {
                 self.move_cursor(0, -1);
             }
-            KeyCode::Char('l') => {
+            KeyCode::Right => {
                 self.move_cursor(0, 1);
             }
             KeyCode::Tab => {
@@ -306,6 +307,19 @@ impl App {
             }
             KeyCode::Tab => {
                 self.insert_tab();
+            }
+            // Arrow key navigation in insert mode
+            KeyCode::Up => {
+                self.move_cursor(-1, 0);
+            }
+            KeyCode::Down => {
+                self.move_cursor(1, 0);
+            }
+            KeyCode::Left => {
+                self.move_cursor(0, -1);
+            }
+            KeyCode::Right => {
+                self.move_cursor(0, 1);
             }
             _ => {}
         }
