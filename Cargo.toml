@@ -8,8 +8,10 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["graalhax"]
+authors = ["vinvicta"]
 license = "MIT"
+repository = "https://github.com/vinvicta/GInjector"
+description = "GS2 bytecode compiler and injector for Graal Online clients"
 
 [workspace.dependencies]
 # GUI
@@ -34,12 +36,15 @@ toml = "0.8"
 
 # Utilities
 arc-swap = "1.7"
-# rfd = "0.15"  # TODO: has dependency conflicts, add back later
 
 [package]
-name = "graalhax"
+name = "ginjector"
 version.workspace = true
 edition.workspace = true
+description.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 eframe = "0.29"
@@ -52,5 +57,5 @@ gs2-compiler = { path = "gs2-compiler" }
 frida-bridge = { path = "frida-bridge" }
 
 [[bin]]
-name = "graalhax"
+name = "ginjector"
 path = "src/main.rs"

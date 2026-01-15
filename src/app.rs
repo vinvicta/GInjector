@@ -1,4 +1,4 @@
-//! GraalHax Application
+//! GInjector Application
 //!
 //! Main application state and UI rendering for the GS2 IDE.
 
@@ -122,7 +122,7 @@ struct InjectionResult {
 }
 
 /// Main application state
-pub struct GraalHaxApp {
+pub struct GInjectorApp {
     // Tabs
     tabs: Vec<ScriptTab>,
     active_tab: usize,
@@ -149,13 +149,13 @@ pub struct GraalHaxApp {
 }
 
 // Drop handler to clean up the background thread
-impl Drop for GraalHaxApp {
+impl Drop for GInjectorApp {
     fn drop(&mut self) {
         // The channel will close when dropped, causing the thread to exit
     }
 }
 
-impl GraalHaxApp {
+impl GInjectorApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // Load configuration with explicit error handling
         let config = match crate::config::Config::load() {
@@ -203,7 +203,7 @@ impl GraalHaxApp {
 
         // Add initial logs
         let mut logs = Vec::new();
-        logs.push(LogEntry::info("GraalHax started"));
+        logs.push(LogEntry::info("GInjector started"));
         logs.push(LogEntry::info(format!("Client: {}", config.client_type.name())));
 
         // Create channel for injection results
@@ -426,7 +426,7 @@ impl GraalHaxApp {
     }
 }
 
-impl eframe::App for GraalHaxApp {
+impl eframe::App for GInjectorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Check for status updates from background thread (non-blocking)
         if let Ok((frida, process)) = self.status_rx.try_recv() {
@@ -745,19 +745,19 @@ impl eframe::App for GraalHaxApp {
                 ui.separator();
                 ui.monospace(format!("Tabs: {}", self.tabs.len()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label("GraalHax v0.1.0");
+                    ui.label("GInjector v0.1.0");
                 });
             });
         });
 
         // About dialog
         if self.show_about {
-            egui::Window::new("About GraalHax")
+            egui::Window::new("About GInjector")
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.heading("GraalHax");
+                        ui.heading("GInjector");
                         ui.label("GS2 Development Environment");
                         ui.label("Version 0.1.0");
                         ui.separator();

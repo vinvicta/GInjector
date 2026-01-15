@@ -1,11 +1,11 @@
-//! GraalHax GUI - GS2 Development Environment
+//! GInjector - GS2 Development Environment
 //!
 //! A graphical IDE for GS2 scripting with integrated compilation and Frida injection.
 
 mod app;
 mod config;
 
-use app::GraalHaxApp;
+use app::GInjectorApp;
 
 fn main() -> eframe::Result {
     // Install panic handler to show errors
@@ -23,7 +23,7 @@ fn main() -> eframe::Result {
 
     // Run the application
     eframe::run_native(
-        "GraalHax - GS2 Development Environment",
+        "GInjector - GS2 Development Environment",
         options,
         Box::new(|cc| {
             // Setup dark theme
@@ -31,7 +31,7 @@ fn main() -> eframe::Result {
             // Enable persistent state
             cc.egui_ctx.set_pixels_per_point(1.0);
 
-            Ok(Box::new(GraalHaxApp::new(cc)))
+            Ok(Box::new(GInjectorApp::new(cc)))
         }),
     )
 }

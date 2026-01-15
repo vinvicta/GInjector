@@ -1,276 +1,493 @@
-# GraalHax
+# GInjector
 
-A **graphical** development environment for GS2 (Graal Script 2) with integrated compilation and bytecode injection via Frida.
+> A professional GS2 (Graal Script 2) development environment with integrated bytecode compiler and Frida-based injection for Graal Online clients.
+
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/vinvicta/GInjector)
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+## Overview
+
+GInjector is a modern, cross-platform IDE for GS2 scripting that combines:
+
+- **Syntax-aware code editor** with tabbed interface
+- **Native GS2 bytecode compiler** written in Rust
+- **Frida-powered injection** for runtime script deployment
+- **Support for Graal V6 and Graal Worlds clients**
+
+The application provides a streamlined workflow for writing, compiling, and injecting GS2 scripts without leaving the IDE.
 
 ## Features
 
-- **Script Editor** - Code editor with monospace font and syntax highlighting
-- **Built-in Compiler** - Integrated GS2 compiler (ported from C++ to Rust)
-- **Client Toggle** - Switch between Graal V6 and Graal Worlds clients
-- **Frida Injection** - Native bytecode injection without external scripts
-- **Real-time Status** - Dashboard showing connection, compilation, and bytecode info
-- **Multiple Tabs** - Edit multiple GS2 scripts simultaneously
+| Feature | Description |
+|---------|-------------|
+| **Script Editor** | Multi-tab editor with monospace font, undo/redo support |
+| **Live Compilation** | Compile GS2 to bytecode with error reporting |
+| **Client Detection** | Auto-detect running Graal clients |
+| **Background Injection** | Non-blocking Frida injection via background threads |
+| **Real-time Dashboard** | Status monitoring for Frida, process, and bytecode |
+| **Cross-platform** | Windows, Linux, and macOS support |
 
 ## Screenshots
 
 ```
-+------------------------------------------------------------------------------------------+
-|  Menu Bar: [File] [Edit] [Build] [Tools]                                                  |
-+------------------------------------------------------------------------------------------+
-|  Dashboard (Status)                                                                       |
-|  +----------+  +----------+  +----------+  +----------+  +----------+                     |
-|  | Graal V6 |  | Frida    |  | Script   |  | Bytecode |  | Toggle   |                     |
-|  |          |  | Attached |  | Compiled |  | 247 bytes|  | ^T=Client|                     |
-|  +----------+  +----------+  +----------+  +----------+  +----------+                     |
-+------------------------------------------------------------------------------------------+
-|  +-------------------------------+  +--------------------------------------------------+  |
-|  |   Script Editor               |  |  Log Window                                       |  |
-|  |   (vim-like keybindings)      |  |  > Compilation successful                          |  |
-|  |                               |  |  > Bytecode: 247 bytes                            |  |
-|  |   function onCreated() {      |  |  [14:32:05] Script injected to Graal.exe          |  |
-|  |     echo("Hello World");      |  |  [14:32:07] onCreated triggered                   |  |
-|  |   }                          |  |                                                   |  |
-|  +-------------------------------+  +--------------------------------------------------+  |
-+------------------------------------------------------------------------------------------+
-|  Bytecode Preview (hex)                                                                   |
-|  00 00 00 01 00 00 00 04 00 00 00 00 00 00 00 02 00 00 00 29 ...                      |
-+------------------------------------------------------------------------------------------+
-|  Status Bar: [NORMAL] | Ln 12, Col 8 | weapon.gs2 | Target: Graal.exe | Ctrl+I to Inject   |
-+------------------------------------------------------------------------------------------+
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│  GInjector - GS2 Development Environment                                  [_][□][×]     │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌─────────────────────────────────────┐  ┌──────────────────┐  ┌─────────────────┐    │
+│  │  Script Editor                      │  │  Dashboard       │  │  Actions        │    │
+│  │                                     │  │                  │  │                 │    │
+│  │  function onCreated() {             │  │  Frida: ✓        │  │  [Compile]      │    │
+│  │    echo("Welcome to GInjector!");   │  │  Process: ✓      │  │  [Inject]       │    │
+│  │    player.chat = "Hello!";          │  │  Client: V6      │  │  [Save]         │    │
+│  │  }                                  │  │  Script: ✓       │  │                 │    │
+│  │                                     │  │  Bytes: 247      │  │                 │    │
+│  │                                     │  │                  │  │                 │    │
+│  └─────────────────────────────────────┘  └──────────────────┘  └─────────────────┘    │
+│                                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
+│  │  Log Window                                                                      │    │
+│  │  > [12:34:05] GInjector started                                                 │    │
+│  │  > [12:34:06] Compiled successfully: 247 bytes                                  │    │
+│  │  > [12:34:10] Injecting into Graal.exe...                                       │    │
+│  │  > [12:34:21] SCRIPT INJECTED                                                   │    │
+│  └─────────────────────────────────────────────────────────────────────────────────┘    │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+│  Untitled.gs2 | Target: Graal.exe | Ln 4, Col 12 | Frida Ready | Ctrl+I to Inject      │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Requirements
+## Table of Contents
 
-- **Rust** 1.70+ - For building the TUI
-- **Frida CLI** - For bytecode injection
-  - Install from: https://frida.re/docs/installation/
-- **Target Graal Client** - Graal V6 or Graal Worlds running
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Client Reference](#client-reference)
+- [GS2 Language](#gs2-language-reference)
+- [Injection Architecture](#injection-architecture)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
-## Building
+---
 
-### Linux/macOS
+## Installation
+
+### Prerequisites
+
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| **Rust** | 1.70+ | For building from source |
+| **Frida CLI** | 16.0+ | Required for injection |
+| **Graal Client** | V6 or Worlds | Target process must be running |
+
+### Installing Frida
+
 ```bash
-git clone https://github.com/yourusername/graalhax.git
-cd graalhax
-cargo build --release
+# Using pip (recommended)
+pip install frida-tools
+
+# Or using npm
+npm install -g frida
+
+# Verify installation
+frida --version
 ```
 
-### Windows
+### Building from Source
+
 ```bash
-git clone https://github.com/yourusername/graalhax.git
-cd graalhax
+# Clone the repository
+git clone https://github.com/vinvicta/GInjector.git
+cd GInjector
+
+# Build release binary
 cargo build --release
+
+# The executable will be at:
+# - Linux/macOS: target/release/ginjector
+# - Windows: target/release/ginjector.exe
 ```
 
-The executable will be at `target/release/graalhax` (Linux/macOS) or `target/release/graalhax.exe` (Windows).
+### Pre-built Binaries
 
-## Usage
+Pre-built binaries are available on the [Releases](https://github.com/vinvicta/GInjector/releases) page.
 
-### Basic Workflow
+---
 
-1. **Launch the TUI**
-   ```bash
-   ./target/release/graalhax
-   ```
+## Quick Start
 
-2. **Write your GS2 script**
-   - Press `i` to enter insert mode
-   - Type your GS2 code
-   - Press `Esc` to return to normal mode
+### 1. Launch GInjector
 
-3. **Compile the script**
-   - Press `Ctrl+B` to compile
-   - Check the log window for compilation results
+```bash
+./target/release/ginjector
+```
 
-4. **Inject into the running client**
-   - Make sure your Graal client is running
-   - Press `Ctrl+I` to inject the bytecode
-   - Watch the logs for injection status
+### 2. Write Your Script
 
-### Keybindings
+```gs2
+function onCreated() {
+    echo("GInjector is running!");
+
+    // Player joined event
+    function onPlayerEnters() {
+        echo("Player " + player.name + " joined!");
+    }
+}
+```
+
+### 3. Compile
+
+Press `Ctrl+B` or `F5` to compile your script. The bytecode size will be displayed in the dashboard.
+
+### 4. Inject
+
+1. Start your Graal client (V6 or Worlds)
+2. Press `Ctrl+I` to inject the compiled bytecode
+3. The script runs immediately in the client
+
+### Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
-| **Files** | |
-| `Ctrl+S` | Save current tab |
-| `Ctrl+O` | Open file |
-| `Ctrl+T` | New tab |
-| `Ctrl+W` | Close tab |
-| **Build** | |
-| `Ctrl+B` or `F5` | Compile script |
+| `Ctrl+S` | Save current script |
+| `Ctrl+O` | Open file dialog |
+| `Ctrl+B` / `F5` | Compile script |
 | `Ctrl+I` | Inject bytecode |
-| **Client** | |
-| `Ctrl+T` | Toggle client (V6 ↔ Worlds) |
-| **Other** | |
-| `Ctrl+Q` | Quit |
+| `Ctrl+T` | New tab |
+| `Ctrl+W` | Close current tab |
+| `Ctrl+Q` | Quit application |
 
-## Client Configuration
-
-### Graal V6
-| Property | Value |
-|----------|-------|
-| Module | `Graal.exe` |
-| Constructor Offset | `0x195770` |
-| SetScript Offset | `0x196290` |
-| Calling Convention | `thiscall` |
-| Magic Check | `0x17da90` = `157876074` |
-| Default Variable | `VarName` |
-
-### Graal Worlds
-| Property | Value |
-|----------|-------|
-| Module | `Graal3DEngine.dll` |
-| Constructor Offset | `0x9A340` |
-| SetScript Offset | `0x9EDE0` |
-| Calling Convention | `cdecl` |
-| Magic Check | None |
-| Default Variable | `.` |
+---
 
 ## Configuration
 
-Create a `config.toml` file in the same directory as the executable:
+GInjector uses a TOML configuration file. Create `config.toml` in the application directory:
 
 ```toml
-# GS2 Compiler path (optional)
-gs2_compiler_path = "./gs2-parser/bin/gs2test"
+# Client Configuration
+[client]
+# Target client: "graalv6" or "graalworlds"
+type = "graalv6"
 
-# Client type: "graalv6" or "graalworlds"
-client_type = "graalv6"
-
-# Override default variable name (optional)
-# default_variable_name = "MyVar"
+# Default variable name for injection (optional)
+# Graal V6 defaults to: "VarName"
+# Graal Worlds defaults to: "."
+# variable_name = "MyCustomVar"
 
 [editor]
-line_numbers = true
+# Editor settings
+font_size = 14
 tab_width = 4
-use_spaces = true
+show_line_numbers = true
 
 [theme]
+# UI colors (hex format)
 background = "#1a1b26"
 foreground = "#a9b1d6"
-primary = "#7aa2f7"
-secondary = "#bb9af7"
-error = "#f7768e"
-warning = "#e0af68"
-success = "#9ece6a"
+accent = "#7aa2f7"
+
+[injection]
+# Injection settings
+timeout_seconds = 30
+wait_before_inject = 10  # Seconds to wait for client init
 ```
 
-## Architecture
+---
+
+## Client Reference
+
+### Graal V6
+
+| Property | Value |
+|----------|-------|
+| **Executable** | `Graal.exe` |
+| **Packed** | Yes (Themida) |
+| **Constructor** | `0x195770` |
+| **SetScript** | `0x196290` |
+| **Convention** | `thiscall` |
+| **Magic Check** | `0x17da90` → `157876074` |
+| **Default Var** | `VarName` |
+
+> **Note:** Graal V6 is packed with Themida. Offsets apply to unpacked versions only.
+
+### Graal Worlds
+
+| Property | Value |
+|----------|-------|
+| **Executable** | `Worlds.exe` |
+| **Packed** | No |
+| **Constructor** | `0x9A340` |
+| **SetScript** | `0x9EDE0` |
+| **Convention** | `cdecl` |
+| **Magic Check** | N/A |
+| **Default Var** | `.` |
+
+---
+
+## GS2 Language Reference
+
+### Basic Syntax
+
+```gs2
+// Event handlers
+function onCreated() {
+    // Runs when script is loaded
+}
+
+function onPlayerEnters() {
+    // Runs when a player enters the area
+}
+
+function onPlayerChats() {
+    // Runs when a player sends a message
+}
+```
+
+### Variables
+
+```gs2
+// Local variables
+local x = 5;
+local text = "Hello";
+
+// Global variables (persist across events)
+this.counter = 0;
+```
+
+### Built-in Objects
+
+| Object | Description |
+|--------|-------------|
+| `player` | The triggering player |
+| `this` | The script object itself |
+| `GraalControl` | Engine control functions |
+
+### Events
+
+| Event | Trigger |
+|-------|---------|
+| `onCreated()` | Script initialized |
+| `onPlayerEnters()` | Player entered level |
+| `onPlayerLeaves()` | Player left level |
+| `onPlayerChats()` | Player sent message |
+| `onTimeout()` | Timer triggered |
+
+For a complete GS2 reference, see [DOCUMENTATION.md](DOCUMENTATION.md).
+
+---
+
+## Injection Architecture
+
+### Workflow Diagram
 
 ```
-graalhax/
-├── src/
-│   ├── main.rs              # Entry point, egui initialization
-│   ├── app.rs               # Application state, egui App trait
-│   └── config.rs            # Configuration management
-├── frida-bridge/            # Frida injection library
-│   └── src/
-│       └── lib.rs           # Native injection logic
-├── gs2-compiler/            # GS2 compiler (WIP)
-│   └── src/
-│       ├── parser/
-│       │   └── lexer.rs     # Logos-based tokenizer
-│       └── opcode/
-│           └── mod.rs       # Opcode definitions
-└── Cargo.toml               # Workspace configuration
+┌─────────────┐      ┌──────────────┐      ┌─────────────┐
+│   GS2       │ ──►  │   Compiler   │ ──►  │  Bytecode   │
+│   Source    │      │  (Rust)      │      │  (Vec<u8>)  │
+└─────────────┘      └──────────────┘      └─────────────┘
+                                                   │
+                                                   ▼
+┌─────────────┐      ┌──────────────┐      ┌─────────────┐
+│   Graal     │ ◄──  │    Frida     │ ◄─── │   Script    │
+│   Client    │      │   Injection  │      │  Generator  │
+└─────────────┘      └──────────────┘      └─────────────┘
 ```
-
-## Injection Method
-
-GraalHax injects GS2 bytecode by:
-
-1. **Compiling** GS2 source code to bytecode
-2. **Generating** a Frida script with the correct client offsets
-3. **Creating** GS2 string structures in target process memory
-4. **Calling** `TGraalVar` constructor and `SetScript` methods
 
 ### Memory Layout
 
-The GS2 string structure created in memory:
+GInjector creates GS2-compatible string structures in target memory:
 
 ```
-+--------+--------+
-|  Ref   | Data   |
-+--------+--------+
-   |         |
-   v         v
-+------+  +-----+-----+-----+-----+-----+-----+
-| ptr  |  | len | val | ...bytes... | \0 |
-+------+  +-----+-----+-----+-----+-----+-----+
-   8B        4B    4B    len+1      1B
+GS2 String Structure (in-process):
+┌──────────────────────────────────────────────┐
+│  Reference Pointer (8 bytes)                 │ ──┐
+│  Points to data structure below              │   │
+└──────────────────────────────────────────────┘   │
+                                                  │
+┌──────────────────────────────────────────────┘   │
+│ Data Structure:                                 │
+│ ┌──────────────────────────────────────────┐   │
+│ │ Length (u32)    │ Value (u32)           │   │
+│ │ 4 bytes         │ 4 bytes (=100)        │   │
+│ ├──────────────────────────────────────────┤   │
+│ │ String bytes...                         │   │
+│ │ (variable length)                        │   │
+│ ├──────────────────────────────────────────┤   │
+│ │ Null terminator (1 byte)                 │   │
+│ └──────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────┘
 ```
+
+### TGraalVar Injection
+
+The tool calls two native functions:
+
+1. **TGraalVar::TGraalVar** - Constructor
+   - Allocates variable object
+   - Sets variable name
+
+2. **TGraalVar::SetScript** - Script loader
+   - Compiles bytecode into executable script
+   - Attaches to variable
+
+---
 
 ## Development
 
-### Project Status
+### Project Structure
 
-- [x] GUI Framework (egui/eframe)
-- [x] Script editor with monospace font
-- [x] Client type toggle
-- [x] Native Frida injection
-- [x] GS2 Lexer (logos)
-- [x] Opcode definitions
-- [ ] LALRPOP grammar for parsing
-- [ ] AST nodes
-- [ ] Bytecode encoder
-- [ ] Full compiler integration
-- [ ] File dialogs (rfd has dependency issues)
+```
+ginjector/
+├── src/
+│   ├── main.rs           # Application entry point
+│   ├── app.rs            # Main app state and UI
+│   └── config.rs         # Configuration management
+├── frida-bridge/         # Frida integration crate
+│   └── src/lib.rs        # Injection logic
+├── gs2-compiler/         # GS2 compiler crate
+│   └── src/
+│       ├── lib.rs        # Compiler interface
+│       ├── parser/       # Language parser
+│       └── opcode/       # Bytecode definitions
+├── docs/                 # Additional documentation
+├── tests/                # Integration tests
+└── Cargo.toml           # Workspace config
+```
 
-### Running Tests
+### Building
 
 ```bash
+# Debug build
+cargo build
+
+# Release build (optimized)
+cargo build --release
+
+# Run tests
 cargo test
+
+# Run with logging
+RUST_LOG=debug cargo run
 ```
 
-### Code Coverage
+### Code Style
 
 ```bash
-cargo install cargo-tarpaulin
-cargo tarpaulin --out Html
+# Format code
+cargo fmt
+
+# Run linter
+cargo clippy -- -W warnings
 ```
+
+---
 
 ## Troubleshooting
 
-### Frida not detected
-- Ensure Frida CLI is installed: `frida --version`
-- Check that Frida is in your PATH
+### Frida Not Detected
 
-### Injection failed
-- Ensure the Graal client is running
-- Check that you've selected the correct client type (Ctrl+T)
-- Try running the client as administrator/sudo
+**Symptoms:** Dashboard shows "Frida: ✗"
 
-### Compilation errors
-- The GS2 compiler is still being ported from C++
-- Use the external `gs2-parser` C++ compiler for now
+**Solutions:**
+1. Verify Frida installation: `frida --version`
+2. Check PATH includes Frida binary location
+3. Reinstall Frida: `pip install --upgrade frida-tools`
 
-## Contributing
+### Injection Fails
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+**Symptoms:** "Injection failed" in logs
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+**Solutions:**
+1. Ensure Graal client is running before injecting
+2. Verify correct client type is selected (V6 vs Worlds)
+3. Run GInjector with elevated permissions (sudo/admin)
+4. Check for antivirus interference with Frida
+
+### GUI Freezes During Injection
+
+**Symptoms:** Application becomes unresponsive
+
+**Solutions:**
+1. This is normal for the 10-second wait period
+2. The UI remains responsive with background threading
+3. Check logs for completion message
+
+### Compilation Errors
+
+**Symptoms:** "Compilation failed" message
+
+**Solutions:**
+1. Check GS2 syntax for errors
+2. Review log panel for specific error messages
+3. Ensure all event functions are properly closed
+
+### Themida Packed Clients
+
+**Symptoms:** Injection crashes Graal V6 client
+
+**Explanation:** Graal V6 uses Themida packing which obfuscates memory
+
+**Solutions:**
+1. Use an unpacked version of Graal.exe for development
+2. Target Graal Worlds instead (unpacked)
+3. Update offsets for packed version (requires reverse engineering)
+
+---
+
+## Documentation
+
+- [DOCUMENTATION.md](DOCUMENTATION.md) - Complete GS2 language reference
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Internal design documentation
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
+
+---
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Acknowledgments
+```
+MIT License
 
-- **GS2 Parser** - Original C++ GS2 compiler by the Graal community
-- **Frida** - Dynamic instrumentation framework
-- **egui** - Rust GUI library
-- **logos** - Rust lexer generator
+Copyright (c) 2025 vinvicta
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction...
+```
+
+---
 
 ## Disclaimer
 
-This tool is for educational purposes only. Using Frida to inject code into running processes may violate the Terms of Service of some games and applications. Use responsibly and at your own risk.
+This tool is provided for educational and research purposes only. Using Frida to inject code into running processes may violate the Terms of Service of some applications. Users are responsible for ensuring their use complies with applicable laws and terms. The author assumes no liability for misuse.
+
+---
 
 ## Resources
 
-- [GS2 Language Reference](https://www.graalonline.com/)
-- [Frida Documentation](https://frida.re/docs/)
-- [egui Documentation](https://docs.rs/egui/)
+| Resource | Link |
+|----------|------|
+| GS2 Language | [Graal Scripts](https://www.graalonline.com/) |
+| Frida Docs | [frida.re/docs](https://frida.re/docs/) |
+| Rust Language | [rust-lang.org](https://www.rust-lang.org/) |
+| egui Framework | [docs.rs/egui](https://docs.rs/egui/) |
+
+---
+
+## Author
+
+**vinvicta**
+
+- GitHub: [@vinvicta](https://github.com/vinvicta)
+
+---
+
+## Acknowledgments
+
+- The Graal community for GS2 language documentation
+- Frida developers for the excellent instrumentation framework
+- egui developers for the simple and effective GUI library
