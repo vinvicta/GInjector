@@ -471,9 +471,9 @@ This tool is provided for educational and research purposes only. Using Frida to
 
 | Resource | Link |
 |----------|------|
-| GS2 Language | [Graal Scripts](https://www.graalonline.com/) |
+| GS2 Language | [Graal Scripts](https://graalonline.net/Creation/Dev/GScript) |
 | Frida Docs | [frida.re/docs](https://frida.re/docs/) |
-| Rust Language | [rust-lang.org](https://www.rust-lang.org/) |
+| GS2 Parser | [GitHub](https://github.com/xtjoeytx/gs2-parser) |
 | egui Framework | [docs.rs/egui](https://docs.rs/egui/) |
 
 ---
