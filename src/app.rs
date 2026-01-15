@@ -131,8 +131,14 @@ pub struct GraalHaxApp {
 
 impl GraalHaxApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        // Load configuration
-        let config = crate::config::Config::load().unwrap_or_default();
+        // Load configuration with explicit error handling
+        let config = match crate::config::Config::load() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                eprintln!("Warning: Failed to load config: {}, using defaults", e);
+                crate::config::Config::default()
+            }
+        };
 
         // Add default tab
         let tabs = vec![ScriptTab::new("Untitled.gs2".to_string())];

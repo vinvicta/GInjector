@@ -2,14 +2,17 @@
 //!
 //! A graphical IDE for GS2 scripting with integrated compilation and Frida injection.
 
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // Hide console in release builds
-
 mod app;
 mod config;
 
 use app::GraalHaxApp;
 
 fn main() -> eframe::Result {
+    // Install panic handler to show errors
+    std::panic::set_hook(Box::new(|panic_info| {
+        eprintln!("PANIC: {}", panic_info);
+    }));
+
     // Setup options for the egui window
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
