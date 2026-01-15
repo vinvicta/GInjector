@@ -92,13 +92,10 @@ The executable will be at `target/release/graalhax` (Linux/macOS) or `target/rel
 | Key | Action |
 |-----|--------|
 | **Movement** | |
-| `↑` | Move cursor up |
-| `↓` | Move cursor down |
-| `←` | Move cursor left |
-| `→` | Move cursor right |
+| `↑` `↓` `←` `→` | Move cursor |
 | **Modes** | |
 | `i` or `Enter` | Enter insert mode |
-| `Esc` | Return to normal mode |
+| `Esc` or `Ctrl+C` | Exit to normal mode |
 | **Editing** | |
 | `Enter` | Insert newline |
 | `Backspace` | Delete character before cursor |
@@ -117,7 +114,7 @@ The executable will be at `target/release/graalhax` (Linux/macOS) or `target/rel
 | **Client** | |
 | `Ctrl+T` | Toggle client (V6 ↔ Worlds) |
 | **Other** | |
-| `Ctrl+Q` | Quit |
+| `Ctrl+Q` | Quit (normal mode only) |
 | `:` | Open command prompt |
 
 ## Client Configuration
