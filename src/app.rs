@@ -542,6 +542,10 @@ impl eframe::App for GraalHaxApp {
                         if ui.button("Save").clicked() {
                             self.save_current_tab();
                         }
+                        if ui.button("Refresh Status").clicked() {
+                            self.update_status();
+                            self.add_log(LogEntry::info("Status refreshed"));
+                        }
 
                         ui.separator();
 
