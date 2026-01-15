@@ -5,6 +5,9 @@
 use crate::config::ClientType;
 use eframe::egui;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 // Re-export frida types
 pub use frida_bridge::{ClientType as FridaClientType, FridaInjector};
@@ -127,6 +130,16 @@ pub struct GraalHaxApp {
     // UI state
     show_about: bool,
     font_id: egui::FontId,
+
+    // Status update receiver (from background thread)
+    status_rx: mpsc::Receiver<(bool, bool)>,  // (frida_available, process_running)
+}
+
+// Drop handler to clean up the background thread
+impl Drop for GraalHaxApp {
+    fn drop(&mut self) {
+        // The channel will close when dropped, causing the thread to exit
+    }
 }
 
 impl GraalHaxApp {
@@ -139,6 +152,37 @@ impl GraalHaxApp {
                 crate::config::Config::default()
             }
         };
+
+        // Create channel for status updates from background thread
+        let (status_tx, status_rx) = mpsc::channel();
+
+        // Spawn background thread for status checking (doesn't block UI)
+        let client_type = config.client_type;
+        thread::spawn(move || {
+            let mut tx = status_tx;
+            let mut last_frida = false;
+            let mut last_process = false;
+            let mut tick: u32 = 0;
+
+            loop {
+                // Check if channel is still open
+                let frida = Self::check_frida_sync();
+                let process = Self::check_process_sync(client_type.target_process());
+
+                // Only send if status changed or every 10 ticks
+                if frida != last_frida || process != last_process || tick % 10 == 0 {
+                    if tx.send((frida, process)).is_err() {
+                        // Channel closed, exit thread
+                        break;
+                    }
+                    last_frida = frida;
+                    last_process = process;
+                }
+
+                tick = tick.wrapping_add(1);
+                thread::sleep(Duration::from_secs(2)); // Check every 2 seconds
+            }
+        });
 
         // Add default tab
         let tabs = vec![ScriptTab::new("Untitled.gs2".to_string())];
@@ -159,7 +203,29 @@ impl GraalHaxApp {
             compiled_bytecode: None,
             show_about: false,
             font_id: egui::FontId::monospace(14.0),
+            status_rx,
         }
+    }
+
+    fn check_frida_sync() -> bool {
+        std::process::Command::new("frida")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    fn check_process_sync(target: &str) -> bool {
+        std::process::Command::new("frida-ps")
+            .output()
+            .map(|output| {
+                if !output.status.success() {
+                    return false;
+                }
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.lines().any(|line| line.contains(target))
+            })
+            .unwrap_or(false)
     }
 
     fn add_log(&mut self, entry: LogEntry) {
@@ -318,44 +384,23 @@ impl GraalHaxApp {
         )));
     }
 
-    fn check_frida_available(&mut self) -> bool {
-        match std::process::Command::new("frida")
-            .arg("--version")
-            .output()
-        {
-            Ok(output) => output.status.success(),
-            Err(_) => false,
-        }
-    }
-
-    fn check_process_running(&mut self) -> bool {
-        let target = self.client_type.target_process();
-        match std::process::Command::new("frida-ps")
-            .output()
-        {
-            Ok(output) => {
-                if !output.status.success() {
-                    return false;
-                }
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // Check if target process is in the list
-                stdout.lines().any(|line| line.contains(target))
-            }
-            Err(_) => false,
-        }
-    }
-
-    fn update_status(&mut self) {
-        self.frida_available = self.check_frida_available();
-        self.process_running = self.check_process_running();
+    fn update_status_manual(&mut self) {
+        // Manual refresh - update immediately
+        self.frida_available = Self::check_frida_sync();
+        self.process_running = Self::check_process_sync(self.client_type.target_process());
     }
 }
 
 impl eframe::App for GraalHaxApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Update status every second
-        ctx.request_repaint_after(std::time::Duration::from_secs(1));
-        self.update_status();
+        // Check for status updates from background thread (non-blocking)
+        if let Ok((frida, process)) = self.status_rx.try_recv() {
+            self.frida_available = frida;
+            self.process_running = process;
+        }
+
+        // Request repaint to keep UI responsive
+        ctx.request_repaint();
 
         // Handle keyboard shortcuts
         ctx.input_mut(|i| {
@@ -543,7 +588,7 @@ impl eframe::App for GraalHaxApp {
                             self.save_current_tab();
                         }
                         if ui.button("Refresh Status").clicked() {
-                            self.update_status();
+                            self.update_status_manual();
                             self.add_log(LogEntry::info("Status refreshed"));
                         }
 
