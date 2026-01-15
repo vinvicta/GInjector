@@ -268,5 +268,13 @@ impl Config {
             ClientType::GraalWorlds => self.offsets.graalworlds.is_some(),
         }
     }
+
+    /// Check if a specific client type is using custom offsets
+    pub fn has_custom_offsets_for(&self, client_type: ClientType) -> bool {
+        match client_type {
+            ClientType::GraalV6 => self.offsets.graalv6.is_some(),
+            ClientType::GraalWorlds => self.offsets.graalworlds.is_some(),
+        }
+    }
 }
 

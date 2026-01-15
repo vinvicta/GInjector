@@ -232,6 +232,7 @@ pub struct GInjectorApp {
     font_id: egui::FontId,
 
     // Settings state
+    settings_client_type: ClientType,
     edit_constructor_offset: String,
     edit_setscript_offset: String,
     edit_magic_check_offset: String,
@@ -326,6 +327,7 @@ impl GInjectorApp {
             show_about: false,
             show_settings: false,
             font_id: egui::FontId::monospace(14.0),
+            settings_client_type: client_type,
             edit_constructor_offset,
             edit_setscript_offset,
             edit_magic_check_offset,
@@ -798,13 +800,33 @@ impl GInjectorApp {
     }
 
     fn open_settings(&mut self) {
-        // Load current offsets into edit fields
+        // Initialize settings client type to match current client type
+        self.settings_client_type = self.client_type;
+
+        // Load current offsets into edit fields based on settings client type
+        self.load_offsets_for_settings_client();
+        self.show_settings = true;
+    }
+
+    fn load_offsets_for_settings_client(&mut self) {
+        // Temporarily set config client type to load correct offsets
+        let original_client_type = self.config.client_type;
+        self.config.client_type = self.settings_client_type;
         let offsets = self.config.get_offsets();
+        self.config.client_type = original_client_type;
+
         self.edit_constructor_offset = offsets.constructor_offset.clone();
         self.edit_setscript_offset = offsets.setscript_offset.clone();
         self.edit_magic_check_offset = offsets.magic_check_offset.clone().unwrap_or_default();
         self.edit_magic_check_value = offsets.magic_check_value.map(|v| v.to_string()).unwrap_or_default();
-        self.show_settings = true;
+    }
+
+    fn toggle_settings_client_type(&mut self) {
+        self.settings_client_type = match self.settings_client_type {
+            ClientType::GraalV6 => ClientType::GraalWorlds,
+            ClientType::GraalWorlds => ClientType::GraalV6,
+        };
+        self.load_offsets_for_settings_client();
     }
 
     fn save_offsets(&mut self) {
@@ -840,10 +862,10 @@ impl GInjectorApp {
             }
         }
 
-        // Build new offsets struct
-        let uses_thiscall = self.config.client_type == ClientType::GraalV6;
+        // Build new offsets struct - use settings_client_type
+        let uses_thiscall = self.settings_client_type == ClientType::GraalV6;
 
-        let (magic_offset, magic_value) = if self.config.client_type == ClientType::GraalV6 {
+        let (magic_offset, magic_value) = if self.settings_client_type == ClientType::GraalV6 {
             let magic_offset_str = self.edit_magic_check_offset.trim();
             let magic_value_str = self.edit_magic_check_value.trim();
 
@@ -884,25 +906,42 @@ impl GInjectorApp {
             magic_check_value: magic_value,
         };
 
-        // Save to config
+        // Save to config - temporarily set client type to save to correct offsets
+        let original_client_type = self.config.client_type;
+        self.config.client_type = self.settings_client_type;
         self.config.set_offsets(offsets);
-        if let Err(e) = self.config.save() {
+        let save_result = self.config.save();
+        self.config.client_type = original_client_type;
+
+        if let Err(e) = save_result {
             self.add_log(LogEntry::error(format!("Failed to save config: {}", e)));
         } else {
-            self.add_log(LogEntry::success("Offsets saved"));
+            self.add_log(LogEntry::success(format!(
+                "Offsets saved for {}",
+                self.settings_client_type.name()
+            )));
         }
 
         self.show_settings = false;
     }
 
     fn reset_offsets_to_default(&mut self) {
+        // Reset for the settings client type
+        let original_client_type = self.config.client_type;
+        self.config.client_type = self.settings_client_type;
         self.config.reset_offsets();
-        if let Err(e) = self.config.save() {
+        let save_result = self.config.save();
+        self.config.client_type = original_client_type;
+
+        if let Err(e) = save_result {
             self.add_log(LogEntry::error(format!("Failed to save config: {}", e)));
         } else {
-            self.add_log(LogEntry::success("Offsets reset to defaults"));
+            self.add_log(LogEntry::success(format!(
+                "Offsets reset to defaults for {}",
+                self.settings_client_type.name()
+            )));
             // Reload edit fields with defaults
-            self.open_settings();
+            self.load_offsets_for_settings_client();
         }
     }
 }
@@ -1359,11 +1398,24 @@ impl eframe::App for GInjectorApp {
                         ui.heading("Memory Offsets");
                         ui.separator();
 
-                        ui.label(format!("Client: {}", self.config.client_type.name()));
+                        // Client type selector and toggle
+                        ui.horizontal(|ui| {
+                            ui.label("Editing offsets for:");
+                            ui.strong(self.settings_client_type.name());
+
+                            // Toggle button
+                            let toggle_text = match self.settings_client_type {
+                                ClientType::GraalV6 => "Switch to Worlds →",
+                                ClientType::GraalWorlds => "Switch to V6 →",
+                            };
+                            if ui.button(toggle_text).clicked() {
+                                self.toggle_settings_client_type();
+                            }
+                        });
                         ui.separator();
 
-                        // Check if using custom offsets
-                        let is_custom = self.config.has_custom_offsets();
+                        // Check if using custom offsets for this client type
+                        let is_custom = self.config.has_custom_offsets_for(self.settings_client_type);
                         if is_custom {
                             ui.colored_label(egui::Color32::YELLOW, "⚠ Using custom offsets");
                         } else {
@@ -1390,7 +1442,7 @@ impl eframe::App for GInjectorApp {
                             .font(egui::FontId::monospace(14.0)));
 
                         // Magic check offset (V6 only)
-                        if self.config.client_type == ClientType::GraalV6 {
+                        if self.settings_client_type == ClientType::GraalV6 {
                             ui.separator();
                             ui.label("Magic Check (V6 only):");
                             ui.horizontal(|ui| {
