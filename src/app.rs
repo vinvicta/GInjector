@@ -112,6 +112,15 @@ impl LogEntry {
     }
 }
 
+/// Injection result
+#[derive(Debug, Clone)]
+struct InjectionResult {
+    success: bool,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+}
+
 /// Main application state
 pub struct GraalHaxApp {
     // Tabs
@@ -133,6 +142,10 @@ pub struct GraalHaxApp {
 
     // Status update receiver (from background thread)
     status_rx: mpsc::Receiver<(bool, bool)>,  // (frida_available, process_running)
+
+    // Injection state (channel is recreated on each injection)
+    injection_rx: Option<mpsc::Receiver<InjectionResult>>,
+    injection_in_progress: bool,
 }
 
 // Drop handler to clean up the background thread
@@ -193,6 +206,9 @@ impl GraalHaxApp {
         logs.push(LogEntry::info("GraalHax started"));
         logs.push(LogEntry::info(format!("Client: {}", config.client_type.name())));
 
+        // Create channel for injection results
+        let injection_rx = None;
+
         Self {
             tabs,
             active_tab,
@@ -204,6 +220,8 @@ impl GraalHaxApp {
             show_about: false,
             font_id: egui::FontId::monospace(14.0),
             status_rx,
+            injection_rx,
+            injection_in_progress: false,
         }
     }
 
@@ -308,6 +326,11 @@ impl GraalHaxApp {
             return;
         }
 
+        if self.injection_in_progress {
+            self.add_log(LogEntry::warning("Injection already in progress..."));
+            return;
+        }
+
         let bytecode = match self.compiled_bytecode.clone() {
             Some(b) => b,
             None => return,
@@ -317,12 +340,6 @@ impl GraalHaxApp {
             ClientType::GraalV6 => FridaClientType::GraalV6,
             ClientType::GraalWorlds => FridaClientType::GraalWorlds,
         };
-
-        self.add_log(LogEntry::info(format!(
-            "Injecting into {} ({} bytes)...",
-            self.client_type.target_process(),
-            bytecode.len()
-        )));
 
         // Convert bytecode to hex
         use frida_bridge::bytecode_to_hex;
@@ -336,52 +353,59 @@ impl GraalHaxApp {
         let temp_dir = std::env::temp_dir();
         let script_path = temp_dir.join("graalhax_inject.js");
 
-        if let Err(e) = std::fs::write(&script_path, script) {
+        if let Err(e) = std::fs::write(&script_path, &script) {
             self.add_log(LogEntry::error(format!("Failed to write script: {}", e)));
             return;
         }
 
-        // Run frida CLI directly (synchronous, no threading issues)
-        let target = self.client_type.target_process();
-        match std::process::Command::new("frida")
-            .arg("-l")
-            .arg(&script_path)
-            .arg(target)
-            .arg("--exit-on-error")
-            .output()
-        {
-            Ok(result) => {
-                let stdout = String::from_utf8_lossy(&result.stdout);
-                let stderr = String::from_utf8_lossy(&result.stderr);
-                let exit_code = result.status.code();
+        // Create channel for this injection
+        let (tx, rx) = mpsc::channel();
+        self.injection_rx = Some(rx);
+        self.injection_in_progress = true;
 
-                if result.status.success() {
-                    self.add_log(LogEntry::success("Injection successful!"));
-                    if !stdout.is_empty() {
-                        for line in stdout.lines() {
-                            self.add_log(LogEntry::info(line.to_string()));
-                        }
+        let target = self.client_type.target_process().to_string();
+        let script_path_str = script_path.clone();
+
+        self.add_log(LogEntry::info(format!(
+            "Injecting into {} ({} bytes)...",
+            target,
+            bytecode.len()
+        )));
+        self.add_log(LogEntry::info("Script running in background (UI will remain responsive)..."));
+
+        // Spawn thread to run Frida (non-blocking)
+        thread::spawn(move || {
+            let result = match std::process::Command::new("frida")
+                .arg("-l")
+                .arg(&script_path_str)
+                .arg(&target)
+                .arg("--exit-on-error")
+                .output()
+            {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    InjectionResult {
+                        success: output.status.success(),
+                        stdout,
+                        stderr,
+                        exit_code: output.status.code(),
                     }
-                } else {
-                    self.add_log(LogEntry::error(format!("Injection failed (exit code: {:?})", exit_code)));
-                    if !stdout.is_empty() {
-                        self.add_log(LogEntry::info(format!("stdout: {}", stdout)));
-                    }
-                    if !stderr.is_empty() {
-                        self.add_log(LogEntry::error(format!("stderr: {}", stderr)));
-                    }
-                    // Also show the script path for debugging
-                    self.add_log(LogEntry::info(format!("Script saved to: {}", script_path.display())));
                 }
-            }
-            Err(e) => {
-                self.add_log(LogEntry::error(format!("Failed to run Frida: {}", e)));
-                self.add_log(LogEntry::info("Make sure Frida is installed and in PATH"));
-            }
-        }
+                Err(e) => InjectionResult {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: format!("Failed to run Frida: {}", e),
+                    exit_code: None,
+                }
+            };
 
-        // Keep the script for debugging (don't delete on error)
-        let _ = std::fs::remove_file(&script_path);
+            // Clean up temp script
+            let _ = std::fs::remove_file(&script_path_str);
+
+            // Send result (ignore if channel closed)
+            let _ = tx.send(result);
+        });
     }
 
     fn toggle_client(&mut self) {
@@ -408,6 +432,34 @@ impl eframe::App for GraalHaxApp {
         if let Ok((frida, process)) = self.status_rx.try_recv() {
             self.frida_available = frida;
             self.process_running = process;
+        }
+
+        // Check for injection results from background thread (non-blocking)
+        if let Some(rx) = &self.injection_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.injection_in_progress = false;
+                self.injection_rx = None;
+
+                if result.success {
+                    self.add_log(LogEntry::success("Injection completed successfully!"));
+                    if !result.stdout.is_empty() {
+                        for line in result.stdout.lines() {
+                            self.add_log(LogEntry::info(line.to_string()));
+                        }
+                    }
+                } else {
+                    self.add_log(LogEntry::error(format!(
+                        "Injection failed (exit code: {:?})",
+                        result.exit_code
+                    )));
+                    if !result.stdout.is_empty() {
+                        self.add_log(LogEntry::info(format!("stdout: {}", result.stdout)));
+                    }
+                    if !result.stderr.is_empty() {
+                        self.add_log(LogEntry::error(format!("stderr: {}", result.stderr)));
+                    }
+                }
+            }
         }
 
         // Request repaint to keep UI responsive
