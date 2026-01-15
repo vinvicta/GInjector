@@ -1,10 +1,10 @@
 # GraalHax
 
-A Terminal User Interface (TUI) development environment for GS2 (Graal Script 2) with integrated compilation and bytecode injection via Frida.
+A **graphical** development environment for GS2 (Graal Script 2) with integrated compilation and bytecode injection via Frida.
 
 ## Features
 
-- **Script Editor** - Vim-like keybindings for writing GS2 scripts
+- **Script Editor** - Code editor with monospace font and syntax highlighting
 - **Built-in Compiler** - Integrated GS2 compiler (ported from C++ to Rust)
 - **Client Toggle** - Switch between Graal V6 and Graal Worlds clients
 - **Frida Injection** - Native bytecode injection without external scripts
@@ -91,31 +91,18 @@ The executable will be at `target/release/graalhax` (Linux/macOS) or `target/rel
 
 | Key | Action |
 |-----|--------|
-| **Movement** | |
-| `↑` `↓` `←` `→` | Move cursor |
-| **Modes** | |
-| `i` or `Enter` | Enter insert mode |
-| `Esc` or `Ctrl+C` | Exit to normal mode |
-| **Editing** | |
-| `Enter` | Insert newline |
-| `Backspace` | Delete character before cursor |
-| `Delete` | Delete character at cursor |
-| `Tab` | Insert tab |
 | **Files** | |
 | `Ctrl+S` | Save current tab |
 | `Ctrl+O` | Open file |
-| `Ctrl+N` | New tab |
+| `Ctrl+T` | New tab |
 | `Ctrl+W` | Close tab |
-| `Tab` | Next tab |
-| `Shift+Tab` | Previous tab |
 | **Build** | |
-| `Ctrl+B` | Compile script |
+| `Ctrl+B` or `F5` | Compile script |
 | `Ctrl+I` | Inject bytecode |
 | **Client** | |
 | `Ctrl+T` | Toggle client (V6 ↔ Worlds) |
 | **Other** | |
-| `Ctrl+Q` | Quit (normal mode only) |
-| `:` | Open command prompt |
+| `Ctrl+Q` | Quit |
 
 ## Client Configuration
 
@@ -173,11 +160,9 @@ success = "#9ece6a"
 ```
 graalhax/
 ├── src/
-│   ├── main.rs              # Entry point, TUI initialization
-│   ├── app.rs               # Application state, editor logic
-│   ├── config.rs            # Configuration management
-│   └── ui/
-│       └── mod.rs           # UI rendering (5-panel layout)
+│   ├── main.rs              # Entry point, egui initialization
+│   ├── app.rs               # Application state, egui App trait
+│   └── config.rs            # Configuration management
 ├── frida-bridge/            # Frida injection library
 │   └── src/
 │       └── lib.rs           # Native injection logic
@@ -219,8 +204,8 @@ The GS2 string structure created in memory:
 
 ### Project Status
 
-- [x] TUI Framework (ratatui)
-- [x] Editor with vim-like keybindings
+- [x] GUI Framework (egui/eframe)
+- [x] Script editor with monospace font
 - [x] Client type toggle
 - [x] Native Frida injection
 - [x] GS2 Lexer (logos)
@@ -229,6 +214,7 @@ The GS2 string structure created in memory:
 - [ ] AST nodes
 - [ ] Bytecode encoder
 - [ ] Full compiler integration
+- [ ] File dialogs (rfd has dependency issues)
 
 ### Running Tests
 
@@ -276,7 +262,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **GS2 Parser** - Original C++ GS2 compiler by the Graal community
 - **Frida** - Dynamic instrumentation framework
-- **ratatui** - Rust TUI library
+- **egui** - Rust GUI library
 - **logos** - Rust lexer generator
 
 ## Disclaimer
@@ -287,4 +273,4 @@ This tool is for educational purposes only. Using Frida to inject code into runn
 
 - [GS2 Language Reference](https://www.graalonline.com/)
 - [Frida Documentation](https://frida.re/docs/)
-- [ratatui Documentation](https://docs.rs/ratatui/)
+- [egui Documentation](https://docs.rs/egui/)
