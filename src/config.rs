@@ -28,7 +28,7 @@ impl ClientType {
     pub fn target_process(&self) -> &'static str {
         match self {
             ClientType::GraalV6 => "Graal.exe",
-            ClientType::GraalWorlds => "Graal3DEngine.dll",
+            ClientType::GraalWorlds => "Worlds.exe",
         }
     }
 

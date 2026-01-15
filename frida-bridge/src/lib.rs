@@ -20,7 +20,7 @@ impl ClientType {
     pub fn target_module(&self) -> &'static str {
         match self {
             ClientType::GraalV6 => "Graal.exe",
-            ClientType::GraalWorlds => "Graal3DEngine.dll",
+            ClientType::GraalWorlds => "Worlds.exe",
         }
     }
 
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn test_client_type_worlds_offsets() {
         let client = ClientType::GraalWorlds;
-        assert_eq!(client.target_module(), "Graal3DEngine.dll");
+        assert_eq!(client.target_module(), "Worlds.exe");
         assert_eq!(client.tgralvar_constructor_offset(), 0x9A340);
         assert_eq!(client.tgralvar_setscript_offset(), 0x9EDE0);
         assert_eq!(client.magic_check_offset(), None);

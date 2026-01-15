@@ -8,7 +8,7 @@ mod config;
 
 use app::App;
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{DisableMouseCapture, EnableMouseCapture, read, poll},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -17,6 +17,7 @@ use ratatui::{
     Terminal,
 };
 use std::io;
+use std::time::Duration;
 use anyhow::Result;
 
 #[tokio::main]
@@ -57,10 +58,14 @@ async fn run_app(
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
 
-        if let Ok(event) = crossterm::event::read() {
-            if let crossterm::event::Event::Key(key) = event {
-                if !app.handle_key(key).await? {
-                    return Ok(());
+        // Use poll with timeout to avoid blocking and process one event at a time
+        if poll(Duration::from_millis(100))? {
+            if let Ok(event) = read() {
+                if let crossterm::event::Event::Key(key) = event {
+                    // Only process key events
+                    if !app.handle_key(key).await? {
+                        return Ok(());
+                    }
                 }
             }
         }
