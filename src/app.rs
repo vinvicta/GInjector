@@ -321,16 +321,75 @@ impl GInjectorApp {
     }
 
     fn check_process_sync(target: &str) -> bool {
-        std::process::Command::new("frida-ps")
-            .output()
-            .map(|output| {
-                if !output.status.success() {
-                    return false;
-                }
+        // First try: use frida-ps to check
+        let frida_result = std::process::Command::new("frida-ps")
+            .output();
+
+        if let Ok(output) = frida_result {
+            if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                stdout.lines().any(|line| line.contains(target))
-            })
-            .unwrap_or(false)
+
+                // Try multiple matching strategies
+                // 1. Exact match with extension
+                if stdout.lines().any(|line| line.contains(target)) {
+                    return true;
+                }
+
+                // 2. Match without .exe extension
+                let target_no_ext = target.trim_end_matches(".exe");
+                if stdout.lines().any(|line| line.contains(target_no_ext)) {
+                    return true;
+                }
+
+                // 3. Case-insensitive match
+                let stdout_lower = stdout.to_lowercase();
+                if stdout_lower.contains(&target.to_lowercase()) ||
+                   stdout_lower.contains(&target_no_ext.to_lowercase()) {
+                    return true;
+                }
+            }
+        }
+
+        // Fallback: try using pgrep (Linux/macOS) or tasklist (Windows)
+        #[cfg(target_os = "windows")]
+        {
+            let target_no_ext = target.trim_end_matches(".exe");
+            if let Ok(output) = std::process::Command::new("tasklist")
+                .args(&["/FI", &format!("IMAGENAME eq {}", target), "/NH"])
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.contains(target_no_ext) && !stdout.contains("No tasks") {
+                    return true;
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let target_no_ext = target.trim_end_matches(".exe");
+            if let Ok(output) = std::process::Command::new("pgrep")
+                .arg("-x")
+                .arg(target_no_ext)
+                .output()
+            {
+                if output.status.success() {
+                    return true;
+                }
+            }
+
+            // Also try pgrep without -x (partial match)
+            if let Ok(output) = std::process::Command::new("pgrep")
+                .arg(target_no_ext)
+                .output()
+            {
+                if output.status.success() {
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     fn add_log(&mut self, entry: LogEntry) {
