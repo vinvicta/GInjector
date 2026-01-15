@@ -353,14 +353,25 @@ impl GraalHaxApp {
             Ok(result) => {
                 let stdout = String::from_utf8_lossy(&result.stdout);
                 let stderr = String::from_utf8_lossy(&result.stderr);
+                let exit_code = result.status.code();
 
                 if result.status.success() {
                     self.add_log(LogEntry::success("Injection successful!"));
                     if !stdout.is_empty() {
-                        self.add_log(LogEntry::info(stdout.to_string()));
+                        for line in stdout.lines() {
+                            self.add_log(LogEntry::info(line.to_string()));
+                        }
                     }
                 } else {
-                    self.add_log(LogEntry::error(format!("Injection failed: {}", stderr)));
+                    self.add_log(LogEntry::error(format!("Injection failed (exit code: {:?})", exit_code)));
+                    if !stdout.is_empty() {
+                        self.add_log(LogEntry::info(format!("stdout: {}", stdout)));
+                    }
+                    if !stderr.is_empty() {
+                        self.add_log(LogEntry::error(format!("stderr: {}", stderr)));
+                    }
+                    // Also show the script path for debugging
+                    self.add_log(LogEntry::info(format!("Script saved to: {}", script_path.display())));
                 }
             }
             Err(e) => {
@@ -369,7 +380,7 @@ impl GraalHaxApp {
             }
         }
 
-        // Clean up temp script
+        // Keep the script for debugging (don't delete on error)
         let _ = std::fs::remove_file(&script_path);
     }
 
