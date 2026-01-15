@@ -217,6 +217,9 @@ pub struct GInjectorApp {
     // Logs
     logs: Vec<LogEntry>,
 
+    // Config
+    config: crate::config::Config,
+
     // Status
     client_type: ClientType,
     frida_available: bool,
@@ -225,7 +228,14 @@ pub struct GInjectorApp {
 
     // UI state
     show_about: bool,
+    show_settings: bool,
     font_id: egui::FontId,
+
+    // Settings state
+    edit_constructor_offset: String,
+    edit_setscript_offset: String,
+    edit_magic_check_offset: String,
+    edit_magic_check_value: String,
 
     // Status update receiver (from background thread)
     status_rx: mpsc::Receiver<(bool, bool)>,  // (frida_available, process_running)
@@ -253,11 +263,19 @@ impl GInjectorApp {
             }
         };
 
+        let client_type = config.client_type;
+        let offsets = config.get_offsets();
+
+        // Initialize edit fields with current offsets
+        let edit_constructor_offset = offsets.constructor_offset.clone();
+        let edit_setscript_offset = offsets.setscript_offset.clone();
+        let edit_magic_check_offset = offsets.magic_check_offset.clone().unwrap_or_default();
+        let edit_magic_check_value = offsets.magic_check_value.map(|v| v.to_string()).unwrap_or_default();
+
         // Create channel for status updates from background thread
         let (status_tx, status_rx) = mpsc::channel();
 
         // Spawn background thread for status checking (doesn't block UI)
-        let client_type = config.client_type;
         thread::spawn(move || {
             let mut tx = status_tx;
             let mut last_frida = false;
@@ -300,12 +318,18 @@ impl GInjectorApp {
             tabs,
             active_tab,
             logs,
-            client_type: config.client_type,
+            config,
+            client_type,
             frida_available: false,
             process_running: false,
             compiled_bytecode: None,
             show_about: false,
+            show_settings: false,
             font_id: egui::FontId::monospace(14.0),
+            edit_constructor_offset,
+            edit_setscript_offset,
+            edit_magic_check_offset,
+            edit_magic_check_value,
             status_rx,
             injection_rx,
             injection_in_progress: false,
@@ -677,8 +701,24 @@ impl GInjectorApp {
         use frida_bridge::bytecode_to_hex;
         let hex = bytecode_to_hex(&bytecode);
 
-        // Generate the Frida script
-        let injector = FridaInjector::new(frida_client_type);
+        // Generate the Frida script with custom offsets if configured
+        let injector = if self.config.has_custom_offsets() {
+            let offsets = self.config.get_offsets();
+            let custom_offsets = frida_bridge::InjectionOffsets {
+                constructor_offset: offsets.constructor_offset_usize().unwrap_or_else(|_| {
+                    frida_client_type.tgralvar_constructor_offset()
+                }),
+                setscript_offset: offsets.setscript_offset_usize().unwrap_or_else(|_| {
+                    frida_client_type.tgralvar_setscript_offset()
+                }),
+                uses_thiscall: offsets.uses_thiscall,
+                magic_check_offset: offsets.magic_check_offset_usize().ok().flatten(),
+                magic_check_value: offsets.magic_check_value,
+            };
+            FridaInjector::with_offsets(frida_client_type, custom_offsets)
+        } else {
+            FridaInjector::new(frida_client_type)
+        };
         let script = injector.generate_injection_script(&hex, frida_client_type.default_variable_name());
 
         // Write script to temp file
@@ -755,6 +795,115 @@ impl GInjectorApp {
         // Manual refresh - update immediately
         self.frida_available = Self::check_frida_sync();
         self.process_running = Self::check_process_sync(self.client_type.target_process());
+    }
+
+    fn open_settings(&mut self) {
+        // Load current offsets into edit fields
+        let offsets = self.config.get_offsets();
+        self.edit_constructor_offset = offsets.constructor_offset.clone();
+        self.edit_setscript_offset = offsets.setscript_offset.clone();
+        self.edit_magic_check_offset = offsets.magic_check_offset.clone().unwrap_or_default();
+        self.edit_magic_check_value = offsets.magic_check_value.map(|v| v.to_string()).unwrap_or_default();
+        self.show_settings = true;
+    }
+
+    fn save_offsets(&mut self) {
+        use crate::config::ClientOffsets;
+
+        // Validate offsets
+        let constructor = self.edit_constructor_offset.trim();
+        let setscript = self.edit_setscript_offset.trim();
+
+        // Validate hex format
+        if !constructor.starts_with("0x") && !constructor.starts_with("0X") {
+            self.add_log(LogEntry::error("Constructor offset must start with 0x"));
+            return;
+        }
+        if !setscript.starts_with("0x") && !setscript.starts_with("0X") {
+            self.add_log(LogEntry::error("SetScript offset must start with 0x"));
+            return;
+        }
+
+        // Parse to validate
+        match crate::config::ClientOffsets::parse_offset(constructor) {
+            Ok(_) => {}
+            Err(e) => {
+                self.add_log(LogEntry::error(format!("Invalid constructor offset: {}", e)));
+                return;
+            }
+        }
+        match crate::config::ClientOffsets::parse_offset(setscript) {
+            Ok(_) => {}
+            Err(e) => {
+                self.add_log(LogEntry::error(format!("Invalid setscript offset: {}", e)));
+                return;
+            }
+        }
+
+        // Build new offsets struct
+        let uses_thiscall = self.config.client_type == ClientType::GraalV6;
+
+        let (magic_offset, magic_value) = if self.config.client_type == ClientType::GraalV6 {
+            let magic_offset_str = self.edit_magic_check_offset.trim();
+            let magic_value_str = self.edit_magic_check_value.trim();
+
+            let magic_offset = if magic_offset_str.is_empty() {
+                None
+            } else {
+                match crate::config::ClientOffsets::parse_offset(magic_offset_str) {
+                    Ok(_) => Some(magic_offset_str.to_string()),
+                    Err(e) => {
+                        self.add_log(LogEntry::error(format!("Invalid magic offset: {}", e)));
+                        return;
+                    }
+                }
+            };
+
+            let magic_value = if magic_value_str.is_empty() {
+                None
+            } else {
+                match magic_value_str.parse::<u32>() {
+                    Ok(v) => Some(v),
+                    Err(_) => {
+                        self.add_log(LogEntry::error("Invalid magic check value"));
+                        return;
+                    }
+                }
+            };
+
+            (magic_offset, magic_value)
+        } else {
+            (None, None)
+        };
+
+        let offsets = ClientOffsets {
+            constructor_offset: constructor.to_string(),
+            setscript_offset: setscript.to_string(),
+            uses_thiscall,
+            magic_check_offset: magic_offset,
+            magic_check_value: magic_value,
+        };
+
+        // Save to config
+        self.config.set_offsets(offsets);
+        if let Err(e) = self.config.save() {
+            self.add_log(LogEntry::error(format!("Failed to save config: {}", e)));
+        } else {
+            self.add_log(LogEntry::success("Offsets saved"));
+        }
+
+        self.show_settings = false;
+    }
+
+    fn reset_offsets_to_default(&mut self) {
+        self.config.reset_offsets();
+        if let Err(e) = self.config.save() {
+            self.add_log(LogEntry::error(format!("Failed to save config: {}", e)));
+        } else {
+            self.add_log(LogEntry::success("Offsets reset to defaults"));
+            // Reload edit fields with defaults
+            self.open_settings();
+        }
     }
 }
 
@@ -855,6 +1004,10 @@ impl eframe::App for GInjectorApp {
                 ui.menu_button("Tools", |ui| {
                     if ui.button("Toggle Client").clicked() {
                         self.toggle_client();
+                        ui.close_menu();
+                    }
+                    if ui.button("Settings").clicked() {
+                        self.open_settings();
                         ui.close_menu();
                     }
                 });
@@ -1187,10 +1340,98 @@ impl eframe::App for GInjectorApp {
                         ui.label("A graphical IDE for GS2 scripting with");
                         ui.label("integrated compilation and Frida injection.");
                         ui.separator();
-                        ui.hyperlink_to("GitHub", "https://github.com/yourusername/graalhax");
+                        ui.hyperlink_to("GitHub", "https://github.com/vinvicta/GInjector");
                         if ui.button("Close").clicked() {
                             self.show_about = false;
                         }
+                    });
+                });
+        }
+
+        // Settings dialog
+        if self.show_settings {
+            egui::Window::new("Settings")
+                .collapsible(false)
+                .resizable(true)
+                .default_width(500.0)
+                .show(ctx, |ui| {
+                    ui.vertical(|ui| {
+                        ui.heading("Memory Offsets");
+                        ui.separator();
+
+                        ui.label(format!("Client: {}", self.config.client_type.name()));
+                        ui.separator();
+
+                        // Check if using custom offsets
+                        let is_custom = self.config.has_custom_offsets();
+                        if is_custom {
+                            ui.colored_label(egui::Color32::YELLOW, "⚠ Using custom offsets");
+                        } else {
+                            ui.colored_label(egui::Color32::GREEN, "✓ Using default offsets");
+                        }
+                        ui.separator();
+
+                        // Constructor offset
+                        ui.horizontal(|ui| {
+                            ui.label("TGraalVar Constructor:");
+                            ui.label("(offset to constructor function)");
+                        });
+                        ui.add(egui::TextEdit::singleline(&mut self.edit_constructor_offset)
+                            .hint_text("0x...")
+                            .font(egui::FontId::monospace(14.0)));
+
+                        // SetScript offset
+                        ui.horizontal(|ui| {
+                            ui.label("TGraalVar::SetScript:");
+                            ui.label("(offset to SetScript method)");
+                        });
+                        ui.add(egui::TextEdit::singleline(&mut self.edit_setscript_offset)
+                            .hint_text("0x...")
+                            .font(egui::FontId::monospace(14.0)));
+
+                        // Magic check offset (V6 only)
+                        if self.config.client_type == ClientType::GraalV6 {
+                            ui.separator();
+                            ui.label("Magic Check (V6 only):");
+                            ui.horizontal(|ui| {
+                                ui.label("Offset:");
+                                ui.add(egui::TextEdit::singleline(&mut self.edit_magic_check_offset)
+                                    .hint_text("0x...")
+                                    .font(egui::FontId::monospace(14.0)));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Value:");
+                                ui.add(egui::TextEdit::singleline(&mut self.edit_magic_check_value)
+                                    .hint_text("157876074")
+                                    .font(egui::FontId::monospace(14.0)));
+                            });
+                        }
+
+                        ui.separator();
+
+                        // Action buttons
+                        ui.horizontal(|ui| {
+                            if ui.button("Save").clicked() {
+                                self.save_offsets();
+                            }
+                            if ui.button("Reset to Defaults").clicked() {
+                                self.reset_offsets_to_default();
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.show_settings = false;
+                            }
+                        });
+
+                        // Info text
+                        ui.separator();
+                        ui.colored_label(
+                            egui::Color32::GRAY,
+                            "Note: Offsets are specific to each client version."
+                        );
+                        ui.colored_label(
+                            egui::Color32::GRAY,
+                            "You need to reverse engineer the client to find new offsets."
+                        );
                     });
                 });
         }
