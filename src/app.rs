@@ -12,6 +12,29 @@ use std::time::Duration;
 // Re-export frida types
 pub use frida_bridge::{ClientType as FridaClientType, FridaInjector};
 
+/// Tab mode - either editing GS2 source or pasting raw bytecode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabMode {
+    Script,
+    Bytecode,
+}
+
+impl TabMode {
+    pub fn name(&self) -> &str {
+        match self {
+            TabMode::Script => "Script",
+            TabMode::Bytecode => "Bytecode",
+        }
+    }
+
+    pub fn extension(&self) -> &str {
+        match self {
+            TabMode::Script => ".gs2",
+            TabMode::Bytecode => ".gs2bc",
+        }
+    }
+}
+
 /// Represents a single script tab
 #[derive(Debug, Clone)]
 pub struct ScriptTab {
@@ -19,6 +42,8 @@ pub struct ScriptTab {
     pub path: Option<PathBuf>,
     pub content: String,
     pub modified: bool,
+    pub mode: TabMode,
+    pub bytecode_hex: String,  // Hex string for bytecode mode
 }
 
 impl ScriptTab {
@@ -28,6 +53,8 @@ impl ScriptTab {
             path: None,
             content: String::new(),
             modified: false,
+            mode: TabMode::Script,
+            bytecode_hex: String::new(),
         }
     }
 
@@ -37,11 +64,32 @@ impl ScriptTab {
             .and_then(|n| n.to_str())
             .unwrap_or("Untitled")
             .to_string();
+
+        // Detect mode from extension
+        let mode = if name.ends_with(".gs2bc") {
+            TabMode::Bytecode
+        } else {
+            TabMode::Script
+        };
+
         Self {
             name,
-            path: Some(path),
+            path: Some(path.clone()),
             content,
             modified: false,
+            mode,
+            bytecode_hex: String::new(),
+        }
+    }
+
+    pub fn from_bytecode(hex: String) -> Self {
+        Self {
+            name: "Pasted Bytecode.gs2bc".to_string(),
+            path: None,
+            content: String::new(),
+            modified: false,
+            mode: TabMode::Bytecode,
+            bytecode_hex: hex,
         }
     }
 
@@ -280,24 +328,167 @@ impl GInjectorApp {
         }
     }
 
-    fn save_current_tab(&mut self) {
-        let tab_name = self.current_tab().map(|t| t.name.clone());
-        if let Some(tab) = self.current_tab_mut() {
-            // If no path, show save dialog (simplified for now)
+    fn toggle_tab_mode(&mut self) {
+        let mode_name = if let Some(tab) = self.current_tab_mut() {
+            tab.mode = match tab.mode {
+                TabMode::Script => TabMode::Bytecode,
+                TabMode::Bytecode => TabMode::Script,
+            };
+
+            // Update tab name extension based on mode
             if tab.path.is_none() {
-                tab.path = Some(PathBuf::from(&tab.name));
+                let base_name = tab.name
+                    .trim_end_matches(".gs2")
+                    .trim_end_matches(".gs2bc");
+                tab.name = format!("{}{}", base_name, tab.mode.extension());
             }
-            tab.modified = false;
+
+            tab.mode.name().to_string()
+        } else {
+            return;
+        };
+
+        self.add_log(LogEntry::info(format!(
+            "Switched to {} mode",
+            mode_name
+        )));
+    }
+
+    fn load_bytecode_from_hex(&mut self) {
+        let hex_string = match self.current_tab() {
+            Some(tab) => tab.bytecode_hex.clone(),
+            None => return,
+        };
+
+        // Parse hex string to bytes
+        let result: Result<Vec<u8>, String> = hex_string
+            .split_whitespace()
+            .map(|s| u8::from_str_radix(s, 16).map_err(|e| format!("Invalid hex: {}", e)))
+            .collect();
+
+        match result {
+            Ok(bytecode) => {
+                self.compiled_bytecode = Some(bytecode.clone());
+                self.add_log(LogEntry::success(format!(
+                    "Loaded {} bytes from hex",
+                    bytecode.len()
+                )));
+
+                // Also update the tab name to show it's loaded
+                if let Some(tab) = self.current_tab_mut() {
+                    if !tab.bytecode_hex.is_empty() {
+                        tab.modified = false;
+                    }
+                }
+            }
+            Err(e) => {
+                self.add_log(LogEntry::error(format!("Failed to parse hex: {}", e)));
+            }
         }
-        if let Some(name) = tab_name {
-            self.add_log(LogEntry::success(format!("Saved: {}", name)));
+    }
+
+    fn save_current_tab(&mut self) {
+        let (_tab_mode, tab_name) = match self.current_tab() {
+            Some(tab) => (tab.mode, tab.name.clone()),
+            None => return,
+        };
+
+        // Determine default filename
+        let default_name = if let Some(ref path) = self.current_tab().and_then(|t| t.path.as_ref()) {
+            path.file_name().and_then(|n| n.to_str()).unwrap_or(&tab_name).to_string()
+        } else {
+            tab_name.clone()
+        };
+
+        let file_path = rfd::FileDialog::new()
+            .set_title("Save File")
+            .set_file_name(&default_name)
+            .save_file();
+
+        if let Some(path) = file_path {
+            if let Some(tab) = self.current_tab_mut() {
+                // Write content based on mode
+                let write_result = match tab.mode {
+                    TabMode::Script => std::fs::write(&path, &tab.content),
+                    TabMode::Bytecode => {
+                        // For bytecode files, save the hex string
+                        std::fs::write(&path, &tab.bytecode_hex)
+                    }
+                };
+
+                match write_result {
+                    Ok(()) => {
+                        tab.path = Some(path.clone());
+                        tab.name = path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("Untitled")
+                            .to_string();
+                        tab.modified = false;
+                        self.add_log(LogEntry::success(format!("Saved: {}", path.display())));
+                    }
+                    Err(e) => {
+                        self.add_log(LogEntry::error(format!("Failed to save: {}", e)));
+                    }
+                }
+            }
+        } else {
+            self.add_log(LogEntry::info("Save cancelled"));
         }
     }
 
     fn open_file(&mut self) {
-        // This would use rfd::FileDialog in full implementation
-        // For now, just log
-        self.add_log(LogEntry::info("Open file dialog (placeholder)"));
+        let file_path = rfd::FileDialog::new()
+            .set_title("Open GS2 Script or Bytecode")
+            .pick_file();
+
+        if let Some(path) = file_path {
+            // Read file content
+            match std::fs::read_to_string(&path) {
+                Ok(content) => {
+                    // Detect file type from extension
+                    let is_bytecode = path.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.eq_ignore_ascii_case("gs2bc"))
+                        .unwrap_or(false);
+
+                    let mut tab = ScriptTab::from_file(path.clone(), content);
+                    tab.mode = if is_bytecode {
+                        TabMode::Bytecode
+                    } else {
+                        TabMode::Script
+                    };
+
+                    // If it's a bytecode file, parse the hex
+                    if tab.mode == TabMode::Bytecode {
+                        tab.bytecode_hex = tab.content.clone();
+                        // Try to parse it
+                        let result: Result<Vec<u8>, String> = tab.content
+                            .split_whitespace()
+                            .map(|s| u8::from_str_radix(s, 16).map_err(|e| format!("Invalid hex: {}", e)))
+                            .collect();
+
+                        if let Ok(bytecode) = result {
+                            self.compiled_bytecode = Some(bytecode);
+                            self.add_log(LogEntry::success(format!(
+                                "Loaded bytecode file: {} bytes",
+                                self.compiled_bytecode.as_ref().unwrap().len()
+                            )));
+                        } else {
+                            self.add_log(LogEntry::warning("Could not parse bytecode, hex will be used for injection"));
+                        }
+                    }
+
+                    self.tabs.push(tab);
+                    self.active_tab = self.tabs.len() - 1;
+                    self.add_log(LogEntry::success(format!("Opened: {}", path.display())));
+                }
+                Err(e) => {
+                    self.add_log(LogEntry::error(format!("Failed to read file: {}", e)));
+                }
+            }
+        } else {
+            self.add_log(LogEntry::info("Open cancelled"));
+        }
     }
 
     fn compile_script(&mut self) {
@@ -557,6 +748,10 @@ impl eframe::App for GInjectorApp {
 
                     let mut clicked_tab = None;
                     let mut close_tab = None;
+                    let mut toggle_mode = false;
+
+                    // Get current tab mode for the toggle button
+                    let current_mode = self.current_tab().map(|t| t.mode).unwrap_or(TabMode::Script);
 
                     for (i, (name, modified)) in tab_info.iter().enumerate() {
                         let is_active = i == self.active_tab;
@@ -590,12 +785,22 @@ impl eframe::App for GInjectorApp {
                         self.new_tab();
                     }
 
+                    // Mode toggle button
+                    ui.separator();
+                    let mode_text = format!("Mode: {}", current_mode.name());
+                    if ui.button(mode_text).clicked() {
+                        toggle_mode = true;
+                    }
+
                     // Handle actions after the loop to avoid borrow issues
                     if let Some(i) = clicked_tab {
                         self.active_tab = i;
                     }
                     if let Some(i) = close_tab {
                         self.close_tab(i);
+                    }
+                    if toggle_mode {
+                        self.toggle_tab_mode();
                     }
                 });
 
@@ -665,32 +870,79 @@ impl eframe::App for GInjectorApp {
                 // Editor area
                 // Clone needed values before mutable borrow
                 let font_id = self.font_id.clone();
+                let tab_mode = self.current_tab().map(|t| t.mode).unwrap_or(TabMode::Script);
                 let tab_name = self.current_tab().map(|t| t.name.clone());
+                let bytecode_preview = self.compiled_bytecode.as_ref()
+                    .map(|b| (b.len(), frida_bridge::bytecode_to_hex(b)));
 
                 if let Some(tab) = self.current_tab_mut() {
                     let name = tab_name.unwrap_or_default();
 
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label("Editor:");
+                            ui.label(format!("Editor ({}):", tab_mode.name()));
                             ui.monospace(name);
                         });
 
-                        let response = egui::ScrollArea::vertical()
-                            .id_salt("editor_scroll")
-                            .show(ui, |ui| {
-                                egui::TextEdit::multiline(&mut tab.content)
-                                    .font(font_id)
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY)
-                                    .show(ui)
-                            });
+                        match tab.mode {
+                            TabMode::Script => {
+                                // Script editor mode
+                                let response = egui::ScrollArea::vertical()
+                                    .id_salt("editor_scroll")
+                                    .show(ui, |ui| {
+                                        egui::TextEdit::multiline(&mut tab.content)
+                                            .font(font_id.clone())
+                                            .code_editor()
+                                            .desired_width(f32::INFINITY)
+                                            .show(ui)
+                                    });
 
-                        // Check for modifications
-                        if response.inner.response.changed() {
-                            tab.modified = true;
+                                // Check for modifications
+                                if response.inner.response.changed() {
+                                    tab.modified = true;
+                                }
+                            }
+                            TabMode::Bytecode => {
+                                // Bytecode paste mode
+                                ui.label("Paste space-separated hex bytecode (e.g., \"00 01 02 FF AB\"):");
+                                ui.add_sized(
+                                    [ui.available_width(), 200.0],
+                                    egui::TextEdit::multiline(&mut tab.bytecode_hex)
+                                        .font(font_id.clone())
+                                        .hint_text("00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F...")
+                                        .desired_width(f32::INFINITY)
+                                );
+
+                                ui.separator();
+
+                                // Parse button - store click to process after the borrow ends
+                                let mut should_load = false;
+                                ui.horizontal(|ui| {
+                                    if ui.button("Parse & Load Bytecode").clicked() {
+                                        should_load = true;
+                                    }
+                                    ui.label("(Converts hex to bytecode and prepares for injection)");
+                                });
+
+                                // Show parsed bytecode info
+                                if let Some((len, hex)) = bytecode_preview {
+                                    ui.separator();
+                                    ui.colored_label(egui::Color32::GREEN, format!("✓ Loaded {} bytes", len));
+                                    ui.monospace(format!("Hex: {}", hex));
+                                }
+
+                                // Store the flag for later processing
+                                if should_load {
+                                    ui.ctx().memory_mut(|m| m.data.insert_temp::<bool>(egui::Id::new("load_bytecode"), true));
+                                }
+                            }
                         }
                     });
+                }
+
+                // Process bytecode load request outside the closure
+                if ctx.memory_mut(|m| m.data.remove_temp::<bool>(egui::Id::new("load_bytecode")).unwrap_or(false)) {
+                    self.load_bytecode_from_hex();
                 }
             });
         });

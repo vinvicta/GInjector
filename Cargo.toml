@@ -55,6 +55,7 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 gs2-compiler = { path = "gs2-compiler" }
 frida-bridge = { path = "frida-bridge" }
+rfd = "0.14"
 
 [[bin]]
 name = "ginjector"
