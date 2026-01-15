@@ -92,12 +92,12 @@ The executable will be at `target/release/graalhax` (Linux/macOS) or `target/rel
 | Key | Action |
 |-----|--------|
 | **Movement** | |
-| `h` | Move cursor left |
-| `j` | Move cursor down |
-| `k` | Move cursor up |
-| `l` | Move cursor right |
+| `↑` | Move cursor up |
+| `↓` | Move cursor down |
+| `←` | Move cursor left |
+| `→` | Move cursor right |
 | **Modes** | |
-| `i` | Enter insert mode |
+| `i` or `Enter` | Enter insert mode |
 | `Esc` | Return to normal mode |
 | **Editing** | |
 | `Enter` | Insert newline |
