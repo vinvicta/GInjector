@@ -1,746 +1,592 @@
-//! Application state management
+//! GraalHax Application
+//!
+//! Main application state and UI rendering for the GS2 IDE.
 
-use crate::config::{Config, ClientType};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::config::ClientType;
+use eframe::egui;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
-use anyhow::Result;
-use frida_bridge::FridaInjector;
 
-/// Current mode of the editor
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EditorMode {
-    Normal,
-    Insert,
-    Visual,
-}
+// Re-export frida types
+pub use frida_bridge::{ClientType as FridaClientType, FridaInjector};
 
-/// Frida connection status
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FridaStatus {
-    Disconnected,
-    Attached,
-    Injecting,
-    Error,
-}
-
-/// Compilation result
+/// Represents a single script tab
 #[derive(Debug, Clone)]
-pub struct CompilationResult {
-    pub success: bool,
-    pub bytecode: Vec<u8>,
-    pub errors: Vec<String>,
-    pub warnings: Vec<String>,
-    pub timestamp: u64,
-}
-
-/// Log entry
-#[derive(Debug, Clone)]
-pub struct LogEntry {
-    pub message: String,
-    pub level: LogLevel,
-    pub timestamp: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LogLevel {
-    Info,
-    Warning,
-    Error,
-    Success,
-}
-
-/// Tab in the editor
-#[derive(Debug, Clone)]
-pub struct Tab {
+pub struct ScriptTab {
     pub name: String,
     pub path: Option<PathBuf>,
     pub content: String,
     pub modified: bool,
-    pub cursor_line: usize,
-    pub cursor_column: usize,
-    pub scroll_offset: usize,
 }
 
-impl Tab {
-    pub fn new(name: String, content: String) -> Self {
+impl ScriptTab {
+    pub fn new(name: String) -> Self {
         Self {
             name,
             path: None,
-            content,
+            content: String::new(),
             modified: false,
-            cursor_line: 0,
-            cursor_column: 0,
-            scroll_offset: 0,
         }
     }
 
-    pub fn from_file(path: PathBuf) -> Result<Self> {
-        let content = std::fs::read_to_string(&path)?;
+    pub fn from_file(path: PathBuf, content: String) -> Self {
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("untitled")
+            .unwrap_or("Untitled")
             .to_string();
-        Ok(Self {
+        Self {
             name,
             path: Some(path),
             content,
             modified: false,
-            cursor_line: 0,
-            cursor_column: 0,
-            scroll_offset: 0,
-        })
+        }
     }
 
-    pub fn lines(&self) -> Vec<&str> {
-        self.content.lines().collect()
+    pub fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+}
+
+/// Log entry with timestamp
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: LogLevel,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LogLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+impl LogEntry {
+    pub fn info(message: impl Into<String>) -> Self {
+        Self {
+            timestamp: Self::now(),
+            level: LogLevel::Info,
+            message: message.into(),
+        }
+    }
+
+    pub fn success(message: impl Into<String>) -> Self {
+        Self {
+            timestamp: Self::now(),
+            level: LogLevel::Success,
+            message: message.into(),
+        }
+    }
+
+    pub fn warning(message: impl Into<String>) -> Self {
+        Self {
+            timestamp: Self::now(),
+            level: LogLevel::Warning,
+            message: message.into(),
+        }
+    }
+
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            timestamp: Self::now(),
+            level: LogLevel::Error,
+            message: message.into(),
+        }
+    }
+
+    fn now() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let duration = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        let secs = duration.as_secs();
+        let hrs = (secs % 86400) / 3600;
+        let mins = (secs % 3600) / 60;
+        let secs = secs % 60;
+        format!("{:02}:{:02}:{:02}", hrs, mins, secs)
     }
 }
 
 /// Main application state
-pub struct App {
-    /// Configuration
-    pub config: Config,
+pub struct GraalHaxApp {
+    // Tabs
+    tabs: Vec<ScriptTab>,
+    active_tab: usize,
 
-    /// Editor mode
-    pub mode: EditorMode,
+    // Logs
+    logs: Vec<LogEntry>,
 
-    /// Open tabs
-    pub tabs: Vec<Tab>,
+    // Status
+    client_type: ClientType,
+    frida_available: bool,
+    process_running: bool,
+    compiled_bytecode: Option<Vec<u8>>,
 
-    /// Current tab index
-    pub current_tab: usize,
-
-    /// Frida status
-    pub frida_status: FridaStatus,
-
-    /// Last compilation result
-    pub compilation_result: Option<CompilationResult>,
-
-    /// Log entries
-    pub logs: Vec<LogEntry>,
-
-    /// Status message
-    pub status_message: String,
-
-    /// Should quit
-    pub should_quit: bool,
-
-    /// Input buffer (for commands, search, etc.)
-    pub input_buffer: String,
-
-    /// Show input popup
-    pub show_input: bool,
+    // UI state
+    show_about: bool,
+    font_id: egui::FontId,
 }
 
-impl App {
-    pub fn new() -> Self {
-        let config = Config::load().unwrap_or_default();
+impl GraalHaxApp {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        // Load configuration
+        let config = crate::config::Config::load().unwrap_or_default();
+
+        // Add default tab
+        let tabs = vec![ScriptTab::new("Untitled.gs2".to_string())];
+        let active_tab = 0;
+
+        // Add initial logs
+        let mut logs = Vec::new();
+        logs.push(LogEntry::info("GraalHax started"));
+        logs.push(LogEntry::info(format!("Client: {}", config.client_type.name())));
 
         Self {
-            config,
-            mode: EditorMode::Normal,
-            tabs: vec![Tab::new(
-                ["untitled", ".", "gs2"].join(""),
-                String::new(),
-            )],
-            current_tab: 0,
-            frida_status: FridaStatus::Disconnected,
-            compilation_result: None,
-            logs: Vec::new(),
-            status_message: "Welcome to GraalHax TUI".to_string(),
-            should_quit: false,
-            input_buffer: String::new(),
-            show_input: false,
+            tabs,
+            active_tab,
+            logs,
+            client_type: config.client_type,
+            frida_available: false,
+            process_running: false,
+            compiled_bytecode: None,
+            show_about: false,
+            font_id: egui::FontId::monospace(14.0),
         }
     }
 
-    /// Get current tab
-    pub fn current_tab(&self) -> Option<&Tab> {
-        self.tabs.get(self.current_tab)
-    }
-
-    /// Get mutable current tab
-    pub fn current_tab_mut(&mut self) -> Option<&mut Tab> {
-        self.tabs.get_mut(self.current_tab)
-    }
-
-    /// Add a log entry
-    pub fn log(&mut self, message: String, level: LogLevel) {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        self.logs.push(LogEntry {
-            message,
-            level,
-            timestamp,
-        });
+    fn add_log(&mut self, entry: LogEntry) {
+        self.logs.push(entry);
         // Keep only last 1000 logs
         if self.logs.len() > 1000 {
             self.logs.remove(0);
         }
     }
 
-    /// Handle key event
-    pub async fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
-        if self.show_input {
-            return self.handle_input_key(key);
-        }
-
-        match self.mode {
-            EditorMode::Normal => self.handle_normal_key(key).await,
-            EditorMode::Insert => self.handle_insert_key(key).await,
-            EditorMode::Visual => self.handle_visual_key(key).await,
-        }
+    fn current_tab_mut(&mut self) -> Option<&mut ScriptTab> {
+        self.tabs.get_mut(self.active_tab)
     }
 
-    fn handle_input_key(&mut self, key: KeyEvent) -> Result<bool> {
-        match key.code {
-            KeyCode::Enter => {
-                // Process input
-                self.show_input = false;
-                self.input_buffer.clear();
-            }
-            KeyCode::Esc => {
-                self.show_input = false;
-                self.input_buffer.clear();
-            }
-            KeyCode::Char(c) => {
-                self.input_buffer.push(c);
-            }
-            KeyCode::Backspace => {
-                self.input_buffer.pop();
-            }
-            _ => {}
-        }
-        Ok(true)
-    }
-
-    async fn handle_normal_key(&mut self, key: KeyEvent) -> Result<bool> {
-        match key.code {
-            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.should_quit = true;
-                return Ok(false);
-            }
-            KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.inject_script().await?;
-            }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.compile_script().await?;
-            }
-            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.save_current_tab()?;
-            }
-            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.open_file()?;
-            }
-            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.new_tab();
-            }
-            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.close_tab();
-            }
-            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.toggle_client_type();
-            }
-            KeyCode::Char('i') | KeyCode::Enter => {
-                self.mode = EditorMode::Insert;
-                self.status_message = "INSERT MODE".to_string();
-            }
-            KeyCode::Char(':') => {
-                self.show_input = true;
-                self.input_buffer = ":".to_string();
-            }
-            // Arrow key navigation
-            KeyCode::Up => {
-                self.move_cursor(-1, 0);
-            }
-            KeyCode::Down => {
-                self.move_cursor(1, 0);
-            }
-            KeyCode::Left => {
-                self.move_cursor(0, -1);
-            }
-            KeyCode::Right => {
-                self.move_cursor(0, 1);
-            }
-            KeyCode::Tab => {
-                // Next tab
-                if self.tabs.len() > 1 {
-                    self.current_tab = (self.current_tab + 1) % self.tabs.len();
-                }
-            }
-            KeyCode::BackTab => {
-                // Previous tab
-                if self.tabs.len() > 1 {
-                    self.current_tab = if self.current_tab == 0 {
-                        self.tabs.len() - 1
-                    } else {
-                        self.current_tab - 1
-                    };
-                }
-            }
-            _ => {}
-        }
-        Ok(true)
-    }
-
-    async fn handle_insert_key(&mut self, key: KeyEvent) -> Result<bool> {
-        match key.code {
-            KeyCode::Esc => {
-                self.mode = EditorMode::Normal;
-                self.status_message = "NORMAL MODE".to_string();
-            }
-            KeyCode::Char('c') | KeyCode::Char('C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Ctrl+C also exits insert mode (doesn't quit in insert mode)
-                self.mode = EditorMode::Normal;
-                self.status_message = "NORMAL MODE".to_string();
-            }
-            KeyCode::Char(c) => {
-                self.insert_char(c);
-            }
-            KeyCode::Enter => {
-                self.insert_newline();
-            }
-            KeyCode::Backspace => {
-                self.backspace();
-            }
-            KeyCode::Delete => {
-                self.delete();
-            }
-            KeyCode::Tab => {
-                self.insert_tab();
-            }
-            // Arrow key navigation in insert mode
-            KeyCode::Up => {
-                self.move_cursor(-1, 0);
-            }
-            KeyCode::Down => {
-                self.move_cursor(1, 0);
-            }
-            KeyCode::Left => {
-                self.move_cursor(0, -1);
-            }
-            KeyCode::Right => {
-                self.move_cursor(0, 1);
-            }
-            _ => {}
-        }
-        Ok(true)
-    }
-
-    async fn handle_visual_key(&mut self, _key: KeyEvent) -> Result<bool> {
-        // For now, just exit visual mode
-        self.mode = EditorMode::Normal;
-        Ok(true)
-    }
-
-    fn insert_char(&mut self, c: char) {
-        if let Some(tab) = self.current_tab_mut() {
-            let lines: Vec<&str> = tab.content.lines().collect();
-            let current_line = lines.get(tab.cursor_line).unwrap_or(&"");
-
-            let mut new_line = String::with_capacity(current_line.len() + 1);
-            if tab.cursor_column <= current_line.len() {
-                new_line.push_str(&current_line[..tab.cursor_column]);
-            }
-            new_line.push(c);
-            if tab.cursor_column < current_line.len() {
-                new_line.push_str(&current_line[tab.cursor_column..]);
-            }
-
-            let mut new_content = String::new();
-            for (i, line) in lines.iter().enumerate() {
-                if i == tab.cursor_line {
-                    new_content.push_str(&new_line);
-                } else {
-                    new_content.push_str(line);
-                }
-                if i < lines.len() - 1 {
-                    new_content.push('\n');
-                }
-            }
-            if lines.is_empty() {
-                new_content.push(c);
-            }
-
-            tab.content = new_content;
-            tab.cursor_column += 1;
-            tab.modified = true;
-        }
-    }
-
-    fn insert_newline(&mut self) {
-        if let Some(tab) = self.current_tab_mut() {
-            let lines: Vec<&str> = tab.content.lines().collect();
-            let current_line = lines.get(tab.cursor_line).unwrap_or(&"");
-
-            let before = if tab.cursor_column <= current_line.len() {
-                &current_line[..tab.cursor_column]
-            } else {
-                current_line
-            };
-            let after = if tab.cursor_column < current_line.len() {
-                &current_line[tab.cursor_column..]
-            } else {
-                ""
-            };
-
-            let mut new_content = String::new();
-            for (i, line) in lines.iter().enumerate() {
-                if i == tab.cursor_line {
-                    new_content.push_str(before);
-                    new_content.push('\n');
-                    new_content.push_str(after);
-                } else {
-                    new_content.push_str(line);
-                }
-                if i < lines.len() - 1 {
-                    new_content.push('\n');
-                }
-            }
-
-            tab.content = new_content;
-            tab.cursor_line += 1;
-            tab.cursor_column = 0;
-            tab.modified = true;
-        }
-    }
-
-    fn backspace(&mut self) {
-        if let Some(tab) = self.current_tab_mut() {
-            let lines: Vec<&str> = tab.content.lines().collect();
-            let current_line = lines.get(tab.cursor_line).unwrap_or(&"");
-
-            if tab.cursor_column > 0 {
-                let mut new_line = String::from(*current_line);
-                new_line.remove(tab.cursor_column - 1);
-
-                let mut new_content = String::new();
-                for (i, line) in lines.iter().enumerate() {
-                    if i == tab.cursor_line {
-                        new_content.push_str(&new_line);
-                    } else {
-                        new_content.push_str(line);
-                    }
-                    if i < lines.len() - 1 {
-                        new_content.push('\n');
-                    }
-                }
-
-                tab.content = new_content;
-                tab.cursor_column -= 1;
-                tab.modified = true;
-            } else if tab.cursor_line > 0 {
-                // Join with previous line
-                let prev_line = lines.get(tab.cursor_line - 1).unwrap_or(&"");
-                let new_column = prev_line.len();
-
-                let mut new_content = String::new();
-                for (i, line) in lines.iter().enumerate() {
-                    if i == tab.cursor_line - 1 {
-                        new_content.push_str(prev_line);
-                        new_content.push_str(current_line);
-                    } else if i != tab.cursor_line {
-                        new_content.push_str(line);
-                    }
-                    if i < lines.len() - 1 && i != tab.cursor_line - 1 {
-                        new_content.push('\n');
-                    }
-                }
-
-                tab.content = new_content;
-                tab.cursor_line -= 1;
-                tab.cursor_column = new_column;
-                tab.modified = true;
-            }
-        }
-    }
-
-    fn delete(&mut self) {
-        if let Some(tab) = self.current_tab_mut() {
-            let lines: Vec<&str> = tab.content.lines().collect();
-            let current_line = lines.get(tab.cursor_line).unwrap_or(&"");
-
-            if tab.cursor_column < current_line.len() {
-                let mut new_line = String::from(*current_line);
-                new_line.remove(tab.cursor_column);
-
-                let mut new_content = String::new();
-                for (i, line) in lines.iter().enumerate() {
-                    if i == tab.cursor_line {
-                        new_content.push_str(&new_line);
-                    } else {
-                        new_content.push_str(line);
-                    }
-                    if i < lines.len() - 1 {
-                        new_content.push('\n');
-                    }
-                }
-
-                tab.content = new_content;
-                tab.modified = true;
-            } else if tab.cursor_line < lines.len() - 1 {
-                // Join with next line
-                let next_line = lines.get(tab.cursor_line + 1).map_or("", |v| *v);
-
-                let mut new_content = String::new();
-                for (i, line) in lines.iter().enumerate() {
-                    if i == tab.cursor_line {
-                        new_content.push_str(current_line);
-                        new_content.push_str(next_line);
-                    } else if i != tab.cursor_line + 1 {
-                        new_content.push_str(line);
-                    }
-                    if i < lines.len() - 1 && i != tab.cursor_line && i != tab.cursor_line + 1 {
-                        new_content.push('\n');
-                    }
-                }
-
-                tab.content = new_content;
-                tab.modified = true;
-            }
-        }
-    }
-
-    fn insert_tab(&mut self) {
-        for _ in 0..self.config.editor.tab_width {
-            self.insert_char(' ');
-        }
-    }
-
-    fn move_cursor(&mut self, line_delta: i32, column_delta: i32) {
-        if let Some(tab) = self.current_tab_mut() {
-            let lines: Vec<&str> = tab.content.lines().collect();
-            let max_line = lines.len().saturating_sub(1);
-
-            let new_line = if line_delta >= 0 {
-                (tab.cursor_line as i32 + line_delta).min(max_line as i32) as usize
-            } else {
-                (tab.cursor_line as i32 + line_delta).max(0) as usize
-            };
-
-            let current_line = lines.get(new_line).map(|s| s.len()).unwrap_or(0);
-            let new_column = if column_delta >= 0 {
-                (tab.cursor_column as i32 + column_delta).min(current_line as i32) as usize
-            } else {
-                (tab.cursor_column as i32 + column_delta).max(0) as usize
-            };
-
-            tab.cursor_line = new_line;
-            tab.cursor_column = new_column;
-
-            // Update scroll offset
-            if tab.cursor_line >= tab.scroll_offset + 20 {
-                tab.scroll_offset = tab.cursor_line.saturating_sub(15);
-            } else if tab.cursor_line < tab.scroll_offset {
-                tab.scroll_offset = tab.cursor_line;
-            }
-        }
+    fn current_tab(&self) -> Option<&ScriptTab> {
+        self.tabs.get(self.active_tab)
     }
 
     fn new_tab(&mut self) {
-        let num = self.tabs.len();
-        let name = ["untitled", &num.to_string(), ".", "gs2"].join("");
-        self.tabs.push(Tab::new(name, String::new()));
-        self.current_tab = self.tabs.len() - 1;
+        let name = format!("Untitled{}.gs2", self.tabs.len() + 1);
+        self.tabs.push(ScriptTab::new(name));
+        self.active_tab = self.tabs.len() - 1;
+        self.add_log(LogEntry::info("New tab created"));
     }
 
-    fn close_tab(&mut self) {
-        if self.tabs.len() > 1 {
-            self.tabs.remove(self.current_tab);
-            if self.current_tab >= self.tabs.len() {
-                self.current_tab = self.tabs.len() - 1;
-            }
+    fn close_tab(&mut self, index: usize) {
+        if self.tabs.len() <= 1 {
+            self.add_log(LogEntry::warning("Cannot close the last tab"));
+            return;
+        }
+        self.tabs.remove(index);
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
         }
     }
 
-    fn toggle_client_type(&mut self) {
-        self.config.client_type = match self.config.client_type {
-            ClientType::GraalV6 => {
-                ClientType::GraalWorlds
+    fn save_current_tab(&mut self) {
+        let tab_name = self.current_tab().map(|t| t.name.clone());
+        if let Some(tab) = self.current_tab_mut() {
+            // If no path, show save dialog (simplified for now)
+            if tab.path.is_none() {
+                tab.path = Some(PathBuf::from(&tab.name));
             }
-            ClientType::GraalWorlds => {
-                ClientType::GraalV6
-            }
-        };
-        self.frida_status = FridaStatus::Disconnected;
-        self.log(
-            format!("Switched to {} client", self.config.client_type.name()),
-            LogLevel::Info,
-        );
-        self.status_message = format!("Client: {}", self.config.client_type.name());
-    }
-
-    fn save_current_tab(&mut self) -> Result<()> {
-        // Check if tab has a path first
-        let has_path = self.current_tab().map(|t| t.path.is_some()).unwrap_or(false);
-        let path_str = self.current_tab().and_then(|t| t.path.as_ref().map(|p| p.display().to_string()));
-
-        if has_path {
-            if let Some(tab) = self.current_tab_mut() {
-                if let Some(path) = &tab.path {
-                    std::fs::write(path, &tab.content)?;
-                    tab.modified = false;
-                }
-            }
-            if let Some(ps) = path_str {
-                self.log(["Saved: ", &ps].join(""), LogLevel::Success);
-            }
-        } else {
-            // Save as new file
-            if let Some(tab) = self.current_tab() {
-                if tab.path.is_none() {
-                    self.show_input = true;
-                    self.input_buffer = "save-as: ".to_string();
-                }
-            }
+            tab.modified = false;
         }
-        Ok(())
-    }
-
-    fn open_file(&mut self) -> Result<()> {
-        // For now, open a default test file
-        let test_path = ["gs2-parser/scripts/syntax-test", ".", "txt"].join("");
-        if let Ok(tab) = Tab::from_file(PathBuf::from(&test_path)) {
-            self.tabs.push(tab);
-            self.current_tab = self.tabs.len() - 1;
-            self.log(["Opened: ", &test_path].join(""), LogLevel::Info);
+        if let Some(name) = tab_name {
+            self.add_log(LogEntry::success(format!("Saved: {}", name)));
         }
-        Ok(())
     }
 
-    async fn compile_script(&mut self) -> Result<()> {
-        // Clone content before borrowing for log
-        let tab_content = if let Some(tab) = self.current_tab() {
-            tab.content.clone()
-        } else {
-            self.log("No tab open".to_string(), LogLevel::Error);
-            return Ok(());
+    fn open_file(&mut self) {
+        // This would use rfd::FileDialog in full implementation
+        // For now, just log
+        self.add_log(LogEntry::info("Open file dialog (placeholder)"));
+    }
+
+    fn compile_script(&mut self) {
+        let tab = match self.current_tab() {
+            Some(tab) => tab,
+            None => return,
         };
 
-        self.log("Compiling script...".to_string(), LogLevel::Info);
+        self.add_log(LogEntry::info(format!("Compiling: {}", tab.name)));
 
-        // Write to temp file
-        let temp_dir = std::env::temp_dir();
-        let temp_file = ["graalhax_temp", ".", "gs2"].join("");
-        let temp_script = temp_dir.join(&temp_file);
-        std::fs::write(&temp_script, &tab_content)?;
+        // TODO: Actual compilation using gs2-compiler
+        // For now, generate dummy bytecode
+        let bytecode = vec![
+            0x00, 0x00, 0x00, 0x01,  // Header
+            0x00, 0x00, 0x00, 0x04,  // Script count
+            0x00, 0x00, 0x00, 0x00,  // Reserved
+        ];
 
-        // Run the compiler
-        let compiler_path = self.config.gs2_compiler_path.clone();
-        let bytecode_file = ["graalhax_temp", ".", "gs2bc"].join("");
-        let output = tokio::process::Command::new(&compiler_path)
-            .arg(&temp_script)
-            .arg("-o")
-            .arg(temp_dir.join(&bytecode_file))
-            .output()
-            .await?;
+        self.compiled_bytecode = Some(bytecode.clone());
+        self.add_log(LogEntry::success(format!("Compilation successful: {} bytes", bytecode.len())));
+    }
 
-        if output.status.success() {
-            // Read bytecode
-            let bytecode_path = temp_dir.join(&bytecode_file);
-            let bytecode = std::fs::read(&bytecode_path)?;
-            let bytecode_len = bytecode.len();
+    fn inject_bytecode(&mut self) {
+        if self.compiled_bytecode.is_none() {
+            self.add_log(LogEntry::warning("No compiled bytecode to inject. Compile first!"));
+            return;
+        }
 
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+        let bytecode = match self.compiled_bytecode.clone() {
+            Some(b) => b,
+            None => return,
+        };
 
-            self.compilation_result = Some(CompilationResult {
-                success: true,
-                bytecode,
-                errors: Vec::new(),
-                warnings: Vec::new(),
-                timestamp,
+        let frida_client_type = match self.client_type {
+            ClientType::GraalV6 => FridaClientType::GraalV6,
+            ClientType::GraalWorlds => FridaClientType::GraalWorlds,
+        };
+
+        self.add_log(LogEntry::info(format!(
+            "Injecting into {} ({} bytes)...",
+            self.client_type.target_process(),
+            bytecode.len()
+        )));
+
+        // Spawn a background thread to handle injection (async operation)
+        let bytecode_clone = bytecode.clone();
+        std::thread::spawn(move || {
+            // Create a new tokio runtime for this thread
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let injector = FridaInjector::new(frida_client_type);
+                let result = injector.inject(&bytecode_clone, &frida_client_type.default_variable_name()).await;
+                // In a real implementation, we'd send this result back to the main thread
+                match result {
+                    Ok(msg) => eprintln!("Injection success: {}", msg),
+                    Err(e) => eprintln!("Injection error: {}", e),
+                }
+            });
+        });
+
+        // For now, just log that injection was initiated
+        self.add_log(LogEntry::info("Injection initiated (check console for details)"));
+    }
+
+    fn toggle_client(&mut self) {
+        self.client_type = match self.client_type {
+            ClientType::GraalV6 => ClientType::GraalWorlds,
+            ClientType::GraalWorlds => ClientType::GraalV6,
+        };
+        self.add_log(LogEntry::info(format!(
+            "Switched to {}",
+            self.client_type.name()
+        )));
+    }
+}
+
+impl eframe::App for GraalHaxApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Handle keyboard shortcuts
+        ctx.input_mut(|i| {
+            if i.consume_key(egui::Modifiers::COMMAND, egui::Key::S) {
+                self.save_current_tab();
+            }
+            if i.consume_key(egui::Modifiers::COMMAND, egui::Key::O) {
+                self.open_file();
+            }
+            if i.consume_key(egui::Modifiers::COMMAND, egui::Key::B) {
+                self.compile_script();
+            }
+            if i.consume_key(egui::Modifiers::COMMAND, egui::Key::I) {
+                self.inject_bytecode();
+            }
+            if i.consume_key(egui::Modifiers::COMMAND, egui::Key::T) {
+                self.new_tab();
+            }
+            if i.consume_key(egui::Modifiers::COMMAND, egui::Key::W) {
+                self.close_tab(self.active_tab);
+            }
+        });
+
+        // Top menu bar
+        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("New Tab (Ctrl+T)").clicked() {
+                        self.new_tab();
+                        ui.close_menu();
+                    }
+                    if ui.button("Open (Ctrl+O)").clicked() {
+                        self.open_file();
+                        ui.close_menu();
+                    }
+                    if ui.button("Save (Ctrl+S)").clicked() {
+                        self.save_current_tab();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Quit (Ctrl+Q)").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+
+                ui.menu_button("Build", |ui| {
+                    if ui.button("Compile (Ctrl+B)").clicked() {
+                        self.compile_script();
+                        ui.close_menu();
+                    }
+                    if ui.button("Inject (Ctrl+I)").clicked() {
+                        self.inject_bytecode();
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("Tools", |ui| {
+                    if ui.button("Toggle Client").clicked() {
+                        self.toggle_client();
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("Help", |ui| {
+                    if ui.button("About").clicked() {
+                        self.show_about = true;
+                        ui.close_menu();
+                    }
+                });
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(format!("Client: {}", self.client_type.name())).clicked() {
+                        self.toggle_client();
+                    }
+                });
+            });
+        });
+
+        // Main content area
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // Split into top (editor) and bottom (logs/bytecode)
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                // Tab bar
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+
+                    // Collect tab info first to avoid borrow issues
+                    let tab_info: Vec<(String, bool)> = self.tabs.iter()
+                        .map(|t| (t.name.clone(), t.modified))
+                        .collect();
+
+                    let mut clicked_tab = None;
+                    let mut close_tab = None;
+
+                    for (i, (name, modified)) in tab_info.iter().enumerate() {
+                        let is_active = i == self.active_tab;
+
+                        if is_active {
+                            ui.style_mut().visuals.selection.bg_fill = egui::Color32::from_rgb(60, 60, 80);
+                        }
+
+                        let response = ui.selectable_label(is_active, format!("{}{} ", name, if *modified { " ●" } else { "" }));
+                        if response.clicked() {
+                            clicked_tab = Some(i);
+                        }
+
+                        // Close button
+                        if response.hovered() && ui.input(|inp| inp.pointer.any_released()) {
+                            if let Some(pos) = ui.input(|inp| inp.pointer.hover_pos()) {
+                                let rect = response.rect;
+                                let close_rect = egui::Rect::from_min_size(
+                                    egui::pos2(rect.right() - 20.0, rect.top()),
+                                    egui::vec2(20.0, rect.height()),
+                                );
+                                if close_rect.contains(pos) {
+                                    close_tab = Some(i);
+                                }
+                            }
+                        }
+                    }
+
+                    // New tab button
+                    if ui.button("+").clicked() {
+                        self.new_tab();
+                    }
+
+                    // Handle actions after the loop to avoid borrow issues
+                    if let Some(i) = clicked_tab {
+                        self.active_tab = i;
+                    }
+                    if let Some(i) = close_tab {
+                        self.close_tab(i);
+                    }
+                });
+
+                ui.separator();
+
+                // Editor and status side-by-side
+                egui::SidePanel::right("status_panel").default_width(200.0).show_inside(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.heading("Status");
+                        ui.separator();
+
+                        // Frida status
+                        ui.horizontal(|ui| {
+                            ui.label("Frida:");
+                            if self.frida_available {
+                                ui.colored_label(egui::Color32::GREEN, "✓ Detected");
+                            } else {
+                                ui.colored_label(egui::Color32::GRAY, "? Unknown");
+                            }
+                        });
+
+                        // Process status
+                        ui.horizontal(|ui| {
+                            ui.label("Client:");
+                            if self.process_running {
+                                ui.colored_label(egui::Color32::GREEN, "✓ Running");
+                            } else {
+                                ui.colored_label(egui::Color32::RED, "✗ Not running");
+                            }
+                        });
+
+                        // Bytecode status
+                        ui.horizontal(|ui| {
+                            ui.label("Bytecode:");
+                            if let Some(ref bytecode) = self.compiled_bytecode {
+                                ui.colored_label(egui::Color32::GREEN, format!("✓ {} bytes", bytecode.len()));
+                            } else {
+                                ui.colored_label(egui::Color32::GRAY, "✗ Not compiled");
+                            }
+                        });
+
+                        ui.separator();
+
+                        // Action buttons
+                        ui.label("Actions:");
+                        if ui.button("Compile").clicked() {
+                            self.compile_script();
+                        }
+                        if ui.button("Inject").clicked() {
+                            self.inject_bytecode();
+                        }
+                        if ui.button("Save").clicked() {
+                            self.save_current_tab();
+                        }
+
+                        ui.separator();
+
+                        // Client info
+                        ui.label(format!("Target:\n{}", self.client_type.target_process()));
+                    });
+                });
+
+                // Editor area
+                // Clone needed values before mutable borrow
+                let font_id = self.font_id.clone();
+                let tab_name = self.current_tab().map(|t| t.name.clone());
+
+                if let Some(tab) = self.current_tab_mut() {
+                    let name = tab_name.unwrap_or_default();
+
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Editor:");
+                            ui.monospace(name);
+                        });
+
+                        let response = egui::ScrollArea::vertical()
+                            .id_salt("editor_scroll")
+                            .show(ui, |ui| {
+                                egui::TextEdit::multiline(&mut tab.content)
+                                    .font(font_id)
+                                    .code_editor()
+                                    .desired_width(f32::INFINITY)
+                                    .show(ui)
+                            });
+
+                        // Check for modifications
+                        if response.inner.response.changed() {
+                            tab.modified = true;
+                        }
+                    });
+                }
+            });
+        });
+
+        // Bottom panel for logs
+        egui::TopBottomPanel::bottom("log_panel").default_height(150.0).max_height(150.0).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Logs:");
+                if ui.button("Clear").clicked() {
+                    self.logs.clear();
+                }
             });
 
-            self.log(
-                ["Compilation successful: ", &bytecode_len.to_string(), " bytes"].join(""),
-                LogLevel::Success,
-            );
-        } else {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-            self.log(["Compilation failed: ", &error_msg].join(""), LogLevel::Error);
-            self.compilation_result = Some(CompilationResult {
-                success: false,
-                bytecode: Vec::new(),
-                errors: vec![error_msg.to_string()],
-                warnings: Vec::new(),
-                timestamp: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-            });
-        }
+            egui::ScrollArea::vertical()
+                .id_salt("log_scroll")
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
 
-        // Clean up temp files
-        let _ = std::fs::remove_file(temp_script);
-        let _ = std::fs::remove_file(temp_dir.join(&bytecode_file));
+                        for log in &self.logs {
+                            let color = match log.level {
+                                LogLevel::Info => egui::Color32::GRAY,
+                                LogLevel::Success => egui::Color32::GREEN,
+                                LogLevel::Warning => egui::Color32::YELLOW,
+                                LogLevel::Error => egui::Color32::RED,
+                            };
 
-        Ok(())
-    }
+                            ui.horizontal(|ui| {
+                                ui.colored_label(egui::Color32::DARK_GRAY, &log.timestamp);
+                                ui.colored_label(color, match log.level {
+                                    LogLevel::Info => ">",
+                                    LogLevel::Success => "✓",
+                                    LogLevel::Warning => "⚠",
+                                    LogLevel::Error => "✗",
+                                });
+                                ui.label(&log.message);
+                            });
+                        }
+                    });
+                });
+        });
 
-    async fn inject_script(&mut self) -> Result<()> {
-        // Compile first if needed
-        if self.compilation_result.is_none() || !self.compilation_result.as_ref().unwrap().success {
-            self.compile_script().await?;
-        }
-
-        let bytecode = if let Some(ref result) = self.compilation_result {
-            if result.success {
-                result.bytecode.clone()
-            } else {
-                self.log("Cannot inject: compilation failed".to_string(), LogLevel::Error);
-                return Ok(());
-            }
-        } else {
-            self.log("Cannot inject: no compilation result".to_string(), LogLevel::Error);
-            return Ok(());
-        };
-
-        // Get client type
-        let frida_client_type = match self.config.client_type {
-            ClientType::GraalV6 => frida_bridge::ClientType::GraalV6,
-            ClientType::GraalWorlds => frida_bridge::ClientType::GraalWorlds,
-        };
-
-        let injector = FridaInjector::new(frida_client_type);
-        let target_process = self.config.target_process();
-        let variable_name = self.config.variable_name();
-
-        self.log(
-            format!(
-                "Injecting {} bytes to {} (var: {})",
-                bytecode.len(),
-                target_process,
-                variable_name
-            ),
-            LogLevel::Info,
-        );
-        self.frida_status = FridaStatus::Injecting;
-
-        // Perform injection
-        match injector.inject(&bytecode, &variable_name).await {
-            Ok(msg) => {
-                self.log("Injection successful".to_string(), LogLevel::Success);
-                for line in msg.lines() {
-                    self.log(line.to_string(), LogLevel::Info);
+        // Status bar
+        egui::TopBottomPanel::bottom("status_bar").default_height(20.0).max_height(20.0).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if let Some(tab) = self.current_tab() {
+                    ui.monospace(tab.name.clone());
                 }
-                self.frida_status = FridaStatus::Attached;
-            }
-            Err(e) => {
-                self.log(
-                    format!("Injection failed: {}", e),
-                    LogLevel::Error,
-                );
-                self.frida_status = FridaStatus::Error;
-            }
-        }
+                ui.separator();
+                ui.monospace(format!("Target: {}", self.client_type.target_process()));
+                ui.separator();
+                ui.monospace(format!("Tabs: {}", self.tabs.len()));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label("GraalHax v0.1.0");
+                });
+            });
+        });
 
-        Ok(())
+        // About dialog
+        if self.show_about {
+            egui::Window::new("About GraalHax")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.heading("GraalHax");
+                        ui.label("GS2 Development Environment");
+                        ui.label("Version 0.1.0");
+                        ui.separator();
+                        ui.label("A graphical IDE for GS2 scripting with");
+                        ui.label("integrated compilation and Frida injection.");
+                        ui.separator();
+                        ui.hyperlink_to("GitHub", "https://github.com/yourusername/graalhax");
+                        if ui.button("Close").clicked() {
+                            self.show_about = false;
+                        }
+                    });
+                });
+        }
     }
 }

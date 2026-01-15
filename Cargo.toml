@@ -12,9 +12,9 @@ authors = ["graalhax"]
 license = "MIT"
 
 [workspace.dependencies]
-# TUI
-ratatui = "0.27"
-crossterm = "0.27"
+# GUI
+eframe = "0.29"
+egui = "0.29"
 
 # Async
 tokio = { version = "1.38", features = ["full"] }
@@ -34,20 +34,19 @@ toml = "0.8"
 
 # Utilities
 arc-swap = "1.7"
+# rfd = "0.15"  # TODO: has dependency conflicts, add back later
 
 [package]
-name = "graalhax-tui"
+name = "graalhax"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-ratatui = "0.27"
-crossterm = "0.27"
+eframe = "0.29"
+egui = "0.29"
 tokio = { version = "1.38", features = ["full"] }
 anyhow = "1.0"
-thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 toml = "0.8"
 gs2-compiler = { path = "gs2-compiler" }
 frida-bridge = { path = "frida-bridge" }
