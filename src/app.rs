@@ -35,6 +35,22 @@ impl TabMode {
     }
 }
 
+/// Bytecode input mode - how to enter/paste bytecode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BytecodeInputMode {
+    Hex,    // Space-separated hex (e.g., "00 01 02 FF")
+    Raw,    // Raw base64 or direct bytes
+}
+
+impl BytecodeInputMode {
+    pub fn name(&self) -> &str {
+        match self {
+            BytecodeInputMode::Hex => "Hex",
+            BytecodeInputMode::Raw => "Raw",
+        }
+    }
+}
+
 /// Represents a single script tab
 #[derive(Debug, Clone)]
 pub struct ScriptTab {
@@ -43,7 +59,10 @@ pub struct ScriptTab {
     pub content: String,
     pub modified: bool,
     pub mode: TabMode,
-    pub bytecode_hex: String,  // Hex string for bytecode mode
+    pub bytecode_hex: String,     // Hex string input
+    pub bytecode_raw: String,     // Raw/base64 string input
+    pub bytecode_bytes: Vec<u8>,  // Parsed bytecode bytes
+    pub bytecode_input_mode: BytecodeInputMode,
 }
 
 impl ScriptTab {
@@ -55,10 +74,13 @@ impl ScriptTab {
             modified: false,
             mode: TabMode::Script,
             bytecode_hex: String::new(),
+            bytecode_raw: String::new(),
+            bytecode_bytes: Vec::new(),
+            bytecode_input_mode: BytecodeInputMode::Hex,
         }
     }
 
-    pub fn from_file(path: PathBuf, content: String) -> Self {
+    pub fn from_file(path: PathBuf, content: String, bytecode_bytes: Vec<u8>) -> Self {
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -72,17 +94,31 @@ impl ScriptTab {
             TabMode::Script
         };
 
+        // If it's a bytecode file, also populate hex representation
+        let (bytecode_hex, bytecode_raw) = if mode == TabMode::Bytecode && !bytecode_bytes.is_empty() {
+            (
+                frida_bridge::bytecode_to_hex(&bytecode_bytes),
+                String::new(), // Raw input starts empty
+            )
+        } else {
+            (String::new(), String::new())
+        };
+
         Self {
             name,
             path: Some(path.clone()),
             content,
             modified: false,
             mode,
-            bytecode_hex: String::new(),
+            bytecode_hex,
+            bytecode_raw,
+            bytecode_bytes,
+            bytecode_input_mode: BytecodeInputMode::Hex,
         }
     }
 
-    pub fn from_bytecode(hex: String) -> Self {
+    pub fn from_bytecode(bytes: Vec<u8>) -> Self {
+        let hex = frida_bridge::bytecode_to_hex(&bytes);
         Self {
             name: "Pasted Bytecode.gs2bc".to_string(),
             path: None,
@@ -90,6 +126,9 @@ impl ScriptTab {
             modified: false,
             mode: TabMode::Bytecode,
             bytecode_hex: hex,
+            bytecode_raw: String::new(),
+            bytecode_bytes: bytes,
+            bytecode_input_mode: BytecodeInputMode::Hex,
         }
     }
 
@@ -354,37 +393,71 @@ impl GInjectorApp {
         )));
     }
 
-    fn load_bytecode_from_hex(&mut self) {
-        let hex_string = match self.current_tab() {
-            Some(tab) => tab.bytecode_hex.clone(),
+    fn load_bytecode_from_input(&mut self) {
+        let (input_mode, input_string) = match self.current_tab() {
+            Some(tab) => (tab.bytecode_input_mode, tab.bytecode_hex.clone()),
             None => return,
         };
 
-        // Parse hex string to bytes
-        let result: Result<Vec<u8>, String> = hex_string
-            .split_whitespace()
-            .map(|s| u8::from_str_radix(s, 16).map_err(|e| format!("Invalid hex: {}", e)))
-            .collect();
+        let bytecode = match input_mode {
+            BytecodeInputMode::Hex => {
+                // Parse hex string to bytes
+                let result: Result<Vec<u8>, String> = input_string
+                    .split_whitespace()
+                    .map(|s| u8::from_str_radix(s, 16).map_err(|e| format!("Invalid hex: {}", e)))
+                    .collect();
+                result
+            }
+            BytecodeInputMode::Raw => {
+                // Try multiple formats for raw input
+                // First try: interpret string content as raw bytes (each char is a byte)
+                let as_bytes = input_string.as_bytes().to_vec();
 
-        match result {
-            Ok(bytecode) => {
-                self.compiled_bytecode = Some(bytecode.clone());
-                self.add_log(LogEntry::success(format!(
-                    "Loaded {} bytes from hex",
-                    bytecode.len()
-                )));
-
-                // Also update the tab name to show it's loaded
-                if let Some(tab) = self.current_tab_mut() {
-                    if !tab.bytecode_hex.is_empty() {
-                        tab.modified = false;
+                // Check if it looks like valid bytecode (non-empty, reasonable values)
+                if !as_bytes.is_empty() && as_bytes.iter().all(|&b| b <= 0x7F) {
+                    Ok(as_bytes)
+                } else {
+                    // Try base64 decoding
+                    use base64::Engine;
+                    match base64::engine::general_purpose::STANDARD.decode(&input_string) {
+                        Ok(decoded) => Ok(decoded),
+                        Err(_) => Err("Could not decode as base64".to_string()),
                     }
                 }
             }
+        };
+
+        match bytecode {
+            Ok(bytes) => {
+                self.compiled_bytecode = Some(bytes.clone());
+                if let Some(tab) = self.current_tab_mut() {
+                    tab.bytecode_bytes = bytes.clone();
+                    tab.bytecode_hex = frida_bridge::bytecode_to_hex(&bytes);
+                }
+                self.add_log(LogEntry::success(format!(
+                    "Loaded {} bytes via {} mode",
+                    bytes.len(),
+                    input_mode.name()
+                )));
+            }
             Err(e) => {
-                self.add_log(LogEntry::error(format!("Failed to parse hex: {}", e)));
+                self.add_log(LogEntry::error(format!("Failed to parse {}: {}", input_mode.name(), e)));
             }
         }
+    }
+
+    fn toggle_bytecode_input_mode(&mut self) {
+        let mode_name = if let Some(tab) = self.current_tab_mut() {
+            tab.bytecode_input_mode = match tab.bytecode_input_mode {
+                BytecodeInputMode::Hex => BytecodeInputMode::Raw,
+                BytecodeInputMode::Raw => BytecodeInputMode::Hex,
+            };
+            tab.bytecode_input_mode.name().to_string()
+        } else {
+            return;
+        };
+
+        self.add_log(LogEntry::info(format!("Input mode: {}", mode_name)));
     }
 
     fn save_current_tab(&mut self) {
@@ -411,8 +484,18 @@ impl GInjectorApp {
                 let write_result = match tab.mode {
                     TabMode::Script => std::fs::write(&path, &tab.content),
                     TabMode::Bytecode => {
-                        // For bytecode files, save the hex string
-                        std::fs::write(&path, &tab.bytecode_hex)
+                        // For bytecode files, save as raw bytes
+                        // Use tab.bytecode_bytes if available, otherwise try to parse from hex
+                        let bytes = if !tab.bytecode_bytes.is_empty() {
+                            tab.bytecode_bytes.clone()
+                        } else {
+                            // Try to parse hex
+                            match frida_bridge::hex_to_bytecode(&tab.bytecode_hex) {
+                                Ok(bytes) => bytes,
+                                Err(_) => vec![],
+                            }
+                        };
+                        std::fs::write(&path, bytes)
                     }
                 };
 
@@ -442,48 +525,47 @@ impl GInjectorApp {
             .pick_file();
 
         if let Some(path) = file_path {
-            // Read file content
-            match std::fs::read_to_string(&path) {
-                Ok(content) => {
-                    // Detect file type from extension
-                    let is_bytecode = path.extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.eq_ignore_ascii_case("gs2bc"))
-                        .unwrap_or(false);
+            // Detect file type from extension
+            let is_bytecode = path.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("gs2bc"))
+                .unwrap_or(false);
 
-                    let mut tab = ScriptTab::from_file(path.clone(), content);
-                    tab.mode = if is_bytecode {
-                        TabMode::Bytecode
-                    } else {
-                        TabMode::Script
-                    };
+            if is_bytecode {
+                // Read as raw bytes
+                match std::fs::read(&path) {
+                    Ok(bytecode_bytes) => {
+                        let mut tab = ScriptTab::from_file(path.clone(), String::new(), bytecode_bytes.clone());
+                        tab.mode = TabMode::Bytecode;
+                        tab.bytecode_bytes = bytecode_bytes.clone();
 
-                    // If it's a bytecode file, parse the hex
-                    if tab.mode == TabMode::Bytecode {
-                        tab.bytecode_hex = tab.content.clone();
-                        // Try to parse it
-                        let result: Result<Vec<u8>, String> = tab.content
-                            .split_whitespace()
-                            .map(|s| u8::from_str_radix(s, 16).map_err(|e| format!("Invalid hex: {}", e)))
-                            .collect();
+                        // Also load into compiled_bytecode for injection
+                        self.compiled_bytecode = Some(bytecode_bytes);
 
-                        if let Ok(bytecode) = result {
-                            self.compiled_bytecode = Some(bytecode);
-                            self.add_log(LogEntry::success(format!(
-                                "Loaded bytecode file: {} bytes",
-                                self.compiled_bytecode.as_ref().unwrap().len()
-                            )));
-                        } else {
-                            self.add_log(LogEntry::warning("Could not parse bytecode, hex will be used for injection"));
-                        }
+                        self.tabs.push(tab);
+                        self.active_tab = self.tabs.len() - 1;
+                        self.add_log(LogEntry::success(format!(
+                            "Opened bytecode file: {} bytes",
+                            self.compiled_bytecode.as_ref().unwrap().len()
+                        )));
                     }
-
-                    self.tabs.push(tab);
-                    self.active_tab = self.tabs.len() - 1;
-                    self.add_log(LogEntry::success(format!("Opened: {}", path.display())));
+                    Err(e) => {
+                        self.add_log(LogEntry::error(format!("Failed to read bytecode file: {}", e)));
+                    }
                 }
-                Err(e) => {
-                    self.add_log(LogEntry::error(format!("Failed to read file: {}", e)));
+            } else {
+                // Read as text (GS2 script)
+                match std::fs::read_to_string(&path) {
+                    Ok(content) => {
+                        let mut tab = ScriptTab::from_file(path.clone(), content, vec![]);
+                        tab.mode = TabMode::Script;
+                        self.tabs.push(tab);
+                        self.active_tab = self.tabs.len() - 1;
+                        self.add_log(LogEntry::success(format!("Opened: {}", path.display())));
+                    }
+                    Err(e) => {
+                        self.add_log(LogEntry::error(format!("Failed to read file: {}", e)));
+                    }
                 }
             }
         } else {
@@ -872,6 +954,7 @@ impl eframe::App for GInjectorApp {
                 let font_id = self.font_id.clone();
                 let tab_mode = self.current_tab().map(|t| t.mode).unwrap_or(TabMode::Script);
                 let tab_name = self.current_tab().map(|t| t.name.clone());
+                let bytecode_input_mode = self.current_tab().map(|t| t.bytecode_input_mode).unwrap_or(BytecodeInputMode::Hex);
                 let bytecode_preview = self.compiled_bytecode.as_ref()
                     .map(|b| (b.len(), frida_bridge::bytecode_to_hex(b)));
 
@@ -903,32 +986,56 @@ impl eframe::App for GInjectorApp {
                                 }
                             }
                             TabMode::Bytecode => {
-                                // Bytecode paste mode
-                                ui.label("Paste space-separated hex bytecode (e.g., \"00 01 02 FF AB\"):");
-                                ui.add_sized(
-                                    [ui.available_width(), 200.0],
-                                    egui::TextEdit::multiline(&mut tab.bytecode_hex)
-                                        .font(font_id.clone())
-                                        .hint_text("00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F...")
-                                        .desired_width(f32::INFINITY)
-                                );
+                                // Input mode toggle
+                                ui.horizontal(|ui| {
+                                    ui.label("Input format:");
+                                    if ui.button(format!("{}", bytecode_input_mode.name())).clicked() {
+                                        ui.ctx().memory_mut(|m| m.data.insert_temp::<bool>(egui::Id::new("toggle_input_mode"), true));
+                                    }
+                                    ui.label("(Click to toggle)");
+                                });
+
+                                ui.separator();
+
+                                match bytecode_input_mode {
+                                    BytecodeInputMode::Hex => {
+                                        ui.label("Paste space-separated hex bytecode (e.g., \"00 01 02 FF AB\"):");
+                                        ui.add_sized(
+                                            [ui.available_width(), 150.0],
+                                            egui::TextEdit::multiline(&mut tab.bytecode_hex)
+                                                .font(font_id.clone())
+                                                .hint_text("00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F...")
+                                                .desired_width(f32::INFINITY)
+                                        );
+                                    }
+                                    BytecodeInputMode::Raw => {
+                                        ui.label("Paste raw bytecode (direct bytes or base64 encoded):");
+                                        ui.add_sized(
+                                            [ui.available_width(), 150.0],
+                                            egui::TextEdit::multiline(&mut tab.bytecode_raw)
+                                                .font(font_id.clone())
+                                                .hint_text("Raw bytecode bytes or base64 string...")
+                                                .desired_width(f32::INFINITY)
+                                        );
+                                    }
+                                }
 
                                 ui.separator();
 
                                 // Parse button - store click to process after the borrow ends
                                 let mut should_load = false;
                                 ui.horizontal(|ui| {
-                                    if ui.button("Parse & Load Bytecode").clicked() {
+                                    if ui.button("Load Bytecode").clicked() {
                                         should_load = true;
                                     }
-                                    ui.label("(Converts hex to bytecode and prepares for injection)");
+                                    ui.label(format!("(Parse {} input and prepare for injection)", bytecode_input_mode.name()));
                                 });
 
                                 // Show parsed bytecode info
                                 if let Some((len, hex)) = bytecode_preview {
                                     ui.separator();
                                     ui.colored_label(egui::Color32::GREEN, format!("✓ Loaded {} bytes", len));
-                                    ui.monospace(format!("Hex: {}", hex));
+                                    ui.monospace(format!("Hex preview: {}", hex));
                                 }
 
                                 // Store the flag for later processing
@@ -942,7 +1049,12 @@ impl eframe::App for GInjectorApp {
 
                 // Process bytecode load request outside the closure
                 if ctx.memory_mut(|m| m.data.remove_temp::<bool>(egui::Id::new("load_bytecode")).unwrap_or(false)) {
-                    self.load_bytecode_from_hex();
+                    self.load_bytecode_from_input();
+                }
+
+                // Process input mode toggle outside the closure
+                if ctx.memory_mut(|m| m.data.remove_temp::<bool>(egui::Id::new("toggle_input_mode")).unwrap_or(false)) {
+                    self.toggle_bytecode_input_mode();
                 }
             });
         });
