@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+members = [
+    "gs2-compiler",
+    "frida-bridge",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["graalhax"]
+license = "MIT"
+
+[workspace.dependencies]
+# TUI
+ratatui = "0.27"
+crossterm = "0.27"
+
+# Async
+tokio = { version = "1.38", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Parsing
+logos = "0.13"
+lalrpop = { version = "0.20", features = ["lexer"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Utilities
+arc-swap = "1.7"
+
+[package]
+name = "graalhax-tui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ratatui = "0.27"
+crossterm = "0.27"
+tokio = { version = "1.38", features = ["full"] }
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+gs2-compiler = { path = "gs2-compiler" }
+frida-bridge = { path = "frida-bridge" }
+
+[[bin]]
+name = "graalhax"
+path = "src/main.rs"
