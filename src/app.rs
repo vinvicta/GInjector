@@ -293,6 +293,11 @@ impl App {
                 self.mode = EditorMode::Normal;
                 self.status_message = "NORMAL MODE".to_string();
             }
+            KeyCode::Char('c') | KeyCode::Char('C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Ctrl+C also exits insert mode (doesn't quit in insert mode)
+                self.mode = EditorMode::Normal;
+                self.status_message = "NORMAL MODE".to_string();
+            }
             KeyCode::Char(c) => {
                 self.insert_char(c);
             }
