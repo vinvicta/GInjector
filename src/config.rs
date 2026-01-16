@@ -9,6 +9,7 @@ use std::path::PathBuf;
 pub enum ClientType {
     GraalV6,
     GraalWorlds,
+    EraSteam,
 }
 
 impl Default for ClientType {
@@ -22,6 +23,7 @@ impl ClientType {
         match self {
             ClientType::GraalV6 => "Graal V6",
             ClientType::GraalWorlds => "Graal Worlds",
+            ClientType::EraSteam => "Era (Steam)",
         }
     }
 
@@ -29,6 +31,7 @@ impl ClientType {
         match self {
             ClientType::GraalV6 => "Graal.exe",
             ClientType::GraalWorlds => "Worlds.exe",
+            ClientType::EraSteam => "Era.exe",
         }
     }
 
@@ -36,6 +39,7 @@ impl ClientType {
         match self {
             ClientType::GraalV6 => "VarName",
             ClientType::GraalWorlds => ".",
+            ClientType::EraSteam => ".",
         }
     }
 
@@ -56,7 +60,21 @@ impl ClientType {
                 magic_check_offset: None,
                 magic_check_value: None,
             },
+            ClientType::EraSteam => ClientOffsets {
+                // Era (Steam) offsets - to be determined via reverse engineering
+                // These are placeholder values that need to be updated
+                constructor_offset: "0x0".to_string(),
+                setscript_offset: "0x0".to_string(),
+                uses_thiscall: false, // Era uses fastcall/stdcall like Worlds
+                magic_check_offset: None,
+                magic_check_value: None,
+            },
         }
+    }
+
+    /// Get all client types as a slice for dropdowns
+    pub fn all() -> &'static [ClientType] {
+        &[ClientType::GraalV6, ClientType::GraalWorlds, ClientType::EraSteam]
     }
 }
 
@@ -134,6 +152,9 @@ pub struct OffsetsConfig {
 
     /// Custom offsets for Graal Worlds (null means use defaults)
     pub graalworlds: Option<ClientOffsets>,
+
+    /// Custom offsets for Era Steam (null means use defaults)
+    pub era_steam: Option<ClientOffsets>,
 }
 
 impl Default for OffsetsConfig {
@@ -141,6 +162,7 @@ impl Default for OffsetsConfig {
         Self {
             graalv6: None,
             graalworlds: None,
+            era_steam: None,
         }
     }
 }
@@ -234,6 +256,11 @@ impl Config {
                     .clone()
                     .unwrap_or_else(|| self.client_type.default_offsets())
             }
+            ClientType::EraSteam => {
+                self.offsets.era_steam
+                    .clone()
+                    .unwrap_or_else(|| self.client_type.default_offsets())
+            }
         }
     }
 
@@ -245,6 +272,9 @@ impl Config {
             }
             ClientType::GraalWorlds => {
                 self.offsets.graalworlds = Some(offsets);
+            }
+            ClientType::EraSteam => {
+                self.offsets.era_steam = Some(offsets);
             }
         }
     }
@@ -258,6 +288,9 @@ impl Config {
             ClientType::GraalWorlds => {
                 self.offsets.graalworlds = None;
             }
+            ClientType::EraSteam => {
+                self.offsets.era_steam = None;
+            }
         }
     }
 
@@ -266,6 +299,7 @@ impl Config {
         match self.client_type {
             ClientType::GraalV6 => self.offsets.graalv6.is_some(),
             ClientType::GraalWorlds => self.offsets.graalworlds.is_some(),
+            ClientType::EraSteam => self.offsets.era_steam.is_some(),
         }
     }
 
@@ -274,6 +308,7 @@ impl Config {
         match client_type {
             ClientType::GraalV6 => self.offsets.graalv6.is_some(),
             ClientType::GraalWorlds => self.offsets.graalworlds.is_some(),
+            ClientType::EraSteam => self.offsets.era_steam.is_some(),
         }
     }
 }

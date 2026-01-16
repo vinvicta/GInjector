@@ -697,6 +697,7 @@ impl GInjectorApp {
         let frida_client_type = match self.client_type {
             ClientType::GraalV6 => FridaClientType::GraalV6,
             ClientType::GraalWorlds => FridaClientType::GraalWorlds,
+            ClientType::EraSteam => FridaClientType::EraSteam,
         };
 
         // Convert bytecode to hex
@@ -785,12 +786,23 @@ impl GInjectorApp {
     fn toggle_client(&mut self) {
         self.client_type = match self.client_type {
             ClientType::GraalV6 => ClientType::GraalWorlds,
-            ClientType::GraalWorlds => ClientType::GraalV6,
+            ClientType::GraalWorlds => ClientType::EraSteam,
+            ClientType::EraSteam => ClientType::GraalV6,
         };
         self.add_log(LogEntry::info(format!(
             "Switched to {}",
             self.client_type.name()
         )));
+    }
+
+    fn set_client(&mut self, client_type: ClientType) {
+        if self.client_type != client_type {
+            self.client_type = client_type;
+            self.add_log(LogEntry::info(format!(
+                "Switched to {}",
+                self.client_type.name()
+            )));
+        }
     }
 
     fn update_status_manual(&mut self) {
@@ -824,7 +836,8 @@ impl GInjectorApp {
     fn toggle_settings_client_type(&mut self) {
         self.settings_client_type = match self.settings_client_type {
             ClientType::GraalV6 => ClientType::GraalWorlds,
-            ClientType::GraalWorlds => ClientType::GraalV6,
+            ClientType::GraalWorlds => ClientType::EraSteam,
+            ClientType::EraSteam => ClientType::GraalV6,
         };
         self.load_offsets_for_settings_client();
     }
@@ -1059,9 +1072,16 @@ impl eframe::App for GInjectorApp {
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(format!("Client: {}", self.client_type.name())).clicked() {
-                        self.toggle_client();
-                    }
+                    // Client selector dropdown
+                    egui::ComboBox::from_id_salt("client_selector")
+                        .selected_text(format!("Client: {}", self.client_type.name()))
+                        .show_ui(ui, |ui| {
+                            for client_type in crate::config::ClientType::all() {
+                                if ui.selectable_value(&mut self.client_type, *client_type, client_type.name()).changed() {
+                                    self.set_client(*client_type);
+                                }
+                            }
+                        });
                 });
             });
         });
@@ -1398,19 +1418,19 @@ impl eframe::App for GInjectorApp {
                         ui.heading("Memory Offsets");
                         ui.separator();
 
-                        // Client type selector and toggle
+                        // Client type selector dropdown
                         ui.horizontal(|ui| {
                             ui.label("Editing offsets for:");
-                            ui.strong(self.settings_client_type.name());
-
-                            // Toggle button
-                            let toggle_text = match self.settings_client_type {
-                                ClientType::GraalV6 => "Switch to Worlds →",
-                                ClientType::GraalWorlds => "Switch to V6 →",
-                            };
-                            if ui.button(toggle_text).clicked() {
-                                self.toggle_settings_client_type();
-                            }
+                            egui::ComboBox::from_id_salt("settings_client_selector")
+                                .selected_text(self.settings_client_type.name())
+                                .width(150.0)
+                                .show_ui(ui, |ui| {
+                                    for client_type in crate::config::ClientType::all() {
+                                        if ui.selectable_value(&mut self.settings_client_type, *client_type, client_type.name()).changed() {
+                                            self.load_offsets_for_settings_client();
+                                        }
+                                    }
+                                });
                         });
                         ui.separator();
 

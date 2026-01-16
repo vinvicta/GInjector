@@ -7,6 +7,7 @@
 pub enum ClientType {
     GraalV6,
     GraalWorlds,
+    EraSteam,
 }
 
 impl ClientType {
@@ -14,6 +15,7 @@ impl ClientType {
         match self {
             ClientType::GraalV6 => "Graal V6",
             ClientType::GraalWorlds => "Graal Worlds",
+            ClientType::EraSteam => "Era (Steam)",
         }
     }
 
@@ -21,6 +23,7 @@ impl ClientType {
         match self {
             ClientType::GraalV6 => "Graal.exe",
             ClientType::GraalWorlds => "Worlds.exe",
+            ClientType::EraSteam => "Era.exe",
         }
     }
 
@@ -28,6 +31,7 @@ impl ClientType {
         match self {
             ClientType::GraalV6 => "VarName",
             ClientType::GraalWorlds => ".",
+            ClientType::EraSteam => ".",
         }
     }
 
@@ -36,6 +40,7 @@ impl ClientType {
         match self {
             ClientType::GraalV6 => 0x195770,
             ClientType::GraalWorlds => 0x9A340,
+            ClientType::EraSteam => 0x0, // Placeholder - needs to be found
         }
     }
 
@@ -44,6 +49,7 @@ impl ClientType {
         match self {
             ClientType::GraalV6 => 0x196290,
             ClientType::GraalWorlds => 0x9EDE0,
+            ClientType::EraSteam => 0x0, // Placeholder - needs to be found
         }
     }
 
@@ -52,6 +58,7 @@ impl ClientType {
         match self {
             ClientType::GraalV6 => true,
             ClientType::GraalWorlds => false,
+            ClientType::EraSteam => false, // Era uses fastcall/stdcall like Worlds
         }
     }
 
@@ -60,6 +67,7 @@ impl ClientType {
         match self {
             ClientType::GraalV6 => Some(0x17da90),
             ClientType::GraalWorlds => None,
+            ClientType::EraSteam => None,
         }
     }
 
@@ -68,6 +76,7 @@ impl ClientType {
         match self {
             ClientType::GraalV6 => Some(157876074),
             ClientType::GraalWorlds => None,
+            ClientType::EraSteam => None,
         }
     }
 }
