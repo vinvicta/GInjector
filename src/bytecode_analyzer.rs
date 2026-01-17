@@ -1,14 +1,13 @@
 //! Bytecode analysis module for decompiling and disassembling GS2 bytecode
 //!
 //! Provides functionality to:
-//! - Decompile bytecode to readable GS2 code
-//! - Disassemble bytecode to instruction listings
+//! - Decompile bytecode to readable GS2 code (via external gbf_driver)
+//! - Disassemble bytecode to instruction listings (via external gbf_driver)
 //! - Clean up decompiled output using regex patterns
 
 use regex::Regex;
-use std::io::Write;
 use std::process::Command;
-use tempfile::NamedTempFile;
+use std::io::Write;
 
 /// Errors that can occur during bytecode analysis
 #[derive(Debug, Clone)]
@@ -21,7 +20,7 @@ pub enum AnalysisError {
     DisassembleFailed(String),
     /// No bytecode provided
     NoBytecode,
-    /// Driver not found
+    /// GBF driver not found
     DriverNotFound,
 }
 
@@ -32,7 +31,7 @@ impl std::fmt::Display for AnalysisError {
             AnalysisError::DecompileFailed(msg) => write!(f, "Failed to decompile: {}", msg),
             AnalysisError::DisassembleFailed(msg) => write!(f, "Failed to disassemble: {}", msg),
             AnalysisError::NoBytecode => write!(f, "No bytecode provided"),
-            AnalysisError::DriverNotFound => write!(f, "GBF driver not found. Please build with: cargo build --manifest-path gbf-rs/gbf_driver/Cargo.toml"),
+            AnalysisError::DriverNotFound => write!(f, "GBF driver not found. Please build gbf_driver with nightly Rust."),
         }
     }
 }
@@ -42,100 +41,114 @@ impl std::error::Error for AnalysisError {}
 /// Result type for analysis operations
 pub type AnalysisResult<T> = Result<T, AnalysisError>;
 
-/// Get the path to the gbf_driver binary
-fn get_driver_path() -> Option<std::path::PathBuf> {
-    // Try multiple possible locations for the driver binary
-    let possible_paths = vec![
-        std::path::PathBuf::from("gbf-rs/target/release/gbf_driver"),
-        std::path::PathBuf::from("../gbf-rs/target/release/gbf_driver"),
-        std::path::PathBuf::from("target/release/gbf_driver"),
-        // Also try debug builds
-        std::path::PathBuf::from("gbf-rs/target/debug/gbf_driver"),
-        std::path::PathBuf::from("../gbf-rs/target/debug/gbf_driver"),
-        std::path::PathBuf::from("target/debug/gbf_driver"),
-    ];
-
-    for path in possible_paths {
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
-    None
-}
-
 /// Decompile GS2 bytecode to readable GS2 code
 ///
-/// Uses the gbf_driver binary to decompile bytecode
+/// Uses the external gbf_driver binary to decompile bytecode
 pub fn decompile_bytecode(bytecode: &[u8]) -> AnalysisResult<String> {
     if bytecode.is_empty() {
         return Err(AnalysisError::NoBytecode);
     }
 
-    let driver_path = get_driver_path().ok_or(AnalysisError::DriverNotFound)?;
+    // Try to find gbf_driver in common locations
+    let driver_path = find_gbf_driver()?;
 
-    // Write bytecode to a temp file
-    let mut temp_file = NamedTempFile::new()
+    // Create a temp file with the bytecode
+    let mut temp_file = tempfile::Builder::new()
+        .suffix(".gs2bc")
+        .tempfile()
         .map_err(|e| AnalysisError::LoadFailed(format!("Failed to create temp file: {}", e)))?;
 
     temp_file.write_all(bytecode)
-        .map_err(|e| AnalysisError::LoadFailed(format!("Failed to write bytecode: {}", e)))?;
+        .map_err(|e| AnalysisError::LoadFailed(format!("Failed to write temp file: {}", e)))?;
 
     let temp_path = temp_file.path();
 
-    // Run gbf_driver to decompile
+    // Run gbf_driver with decompile command
     let output = Command::new(&driver_path)
+        .arg("decompile")
         .arg(temp_path)
-        .arg("--minified")
         .output()
-        .map_err(|e| AnalysisError::DecompileFailed(format!("Failed to run driver: {}", e)))?;
+        .map_err(|e| AnalysisError::DecompileFailed(format!("Failed to run gbf_driver: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AnalysisError::DecompileFailed(format!("Driver error: {}", stderr)));
+        return Err(AnalysisError::DecompileFailed(format!("gbf_driver error: {}", stderr)));
     }
 
     let decompiled = String::from_utf8_lossy(&output.stdout).to_string();
-
     Ok(clean_decompiled_code(&decompiled))
 }
 
 /// Disassemble GS2 bytecode to instruction listings
 ///
-/// Uses the gbf_driver binary to disassemble bytecode
+/// Uses the external gbf_driver binary to disassemble bytecode
 pub fn disassemble_bytecode(bytecode: &[u8]) -> AnalysisResult<String> {
     if bytecode.is_empty() {
         return Err(AnalysisError::NoBytecode);
     }
 
-    let driver_path = get_driver_path().ok_or(AnalysisError::DriverNotFound)?;
+    // Try to find gbf_driver in common locations
+    let driver_path = find_gbf_driver()?;
 
-    // Write bytecode to a temp file
-    let mut temp_file = NamedTempFile::new()
+    // Create a temp file with the bytecode
+    let mut temp_file = tempfile::Builder::new()
+        .suffix(".gs2bc")
+        .tempfile()
         .map_err(|e| AnalysisError::LoadFailed(format!("Failed to create temp file: {}", e)))?;
 
     temp_file.write_all(bytecode)
-        .map_err(|e| AnalysisError::LoadFailed(format!("Failed to write bytecode: {}", e)))?;
+        .map_err(|e| AnalysisError::LoadFailed(format!("Failed to write temp file: {}", e)))?;
 
     let temp_path = temp_file.path();
 
-    // Run gbf_driver in disassembly mode (module mode with minified output gives us raw output)
+    // Run gbf_driver with disassemble command
     let output = Command::new(&driver_path)
+        .arg("disassemble")
         .arg(temp_path)
-        .arg("--function")
-        .arg("join")
-        .arg("--minified")
         .output()
-        .map_err(|e| AnalysisError::DisassembleFailed(format!("Failed to run driver: {}", e)))?;
+        .map_err(|e| AnalysisError::DisassembleFailed(format!("Failed to run gbf_driver: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AnalysisError::DisassembleFailed(format!("Driver error: {}", stderr)));
+        return Err(AnalysisError::DisassembleFailed(format!("gbf_driver error: {}", stderr)));
     }
 
-    let disassembled = String::from_utf8_lossy(&output.stdout).to_string();
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
 
-    Ok(disassembled)
+/// Find the gbf_driver executable in common locations
+fn find_gbf_driver() -> Result<String, AnalysisError> {
+    // Common locations to search
+    let search_paths = vec![
+        // Next to the executable (for release builds)
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(parent) = exe_path.parent() {
+                parent.join("gbf_driver").to_string_lossy().to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        },
+        // In the project's gbf-rs directory (for development)
+        "gbf-rs/target/release/gbf_driver".to_string(),
+        "../gbf-rs/target/release/gbf_driver".to_string(),
+        // In PATH
+        "gbf_driver".to_string(),
+    ];
+
+    for path in search_paths {
+        if path.is_empty() {
+            continue;
+        }
+
+        // Check if the path exists and is executable
+        if std::path::Path::new(&path).exists() {
+            return Ok(path);
+        }
+    }
+
+    Err(AnalysisError::DriverNotFound)
 }
 
 /// Clean up decompiled code using regex patterns
@@ -245,11 +258,6 @@ pub fn hex_to_bytecode(hex: &str) -> AnalysisResult<Vec<u8>> {
     }
 
     Ok(bytecode)
-}
-
-/// Check if the gbf_driver is available
-pub fn is_driver_available() -> bool {
-    get_driver_path().is_some()
 }
 
 #[cfg(test)]

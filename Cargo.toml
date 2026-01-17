@@ -58,7 +58,7 @@ frida-bridge = { path = "frida-bridge" }
 rfd = "0.14"
 base64 = "0.22"
 regex = "1.11"
-tempfile = "3.14"
+tempfile = "3.13"
 
 [[bin]]
 name = "ginjector"
