@@ -26,6 +26,10 @@ The application provides a streamlined workflow for writing, compiling, and inje
 | **Client Detection** | Auto-detect running Graal clients |
 | **Background Injection** | Non-blocking Frida injection via background threads |
 | **Real-time Dashboard** | Status monitoring for Frida, process, and bytecode |
+| **Bytecode Preview** | See decompiled code before injecting |
+| **Decompiler/Disassembler** | Analyze existing bytecode |
+| **Pattern Scanning** | Era (Steam) uses pattern-based offset detection |
+| **Configurable Offsets** | Update memory offsets when clients update |
 | **Cross-platform** | Windows, Linux, and macOS support |
 
 ## Screenshots
@@ -79,9 +83,10 @@ The application provides a streamlined workflow for writing, compiling, and inje
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| **Rust** | 1.70+ | For building from source |
+| **Rust** | 1.70+ (stable) | For building from source |
+| **Rust** | nightly | For building gbf_driver (decompiler) |
 | **Frida CLI** | 16.0+ | Required for injection |
-| **Graal Client** | V6 or Worlds | Target process must be running |
+| **Graal Client** | V6, Worlds, or Era | Target process must be running |
 
 ### Installing Frida
 
@@ -110,6 +115,23 @@ cargo build --release
 # - Linux/macOS: target/release/ginjector
 # - Windows: target/release/ginjector.exe
 ```
+
+### Building the Decompiler (Optional)
+
+The decompiler and disassembler features require the `gbf_driver` binary to be built separately with nightly Rust:
+
+```bash
+# Install nightly Rust
+rustup install nightly
+
+# Build gbf_driver with nightly
+cd gbf-rs
+cargo +nightly build --release --bin gbf_driver
+
+# The binary will be at: gbf-rs/target/release/gbf_driver
+```
+
+> **Note:** The decompiler/disassembler will show a "GBF driver not found" message if `gbf_driver` is not built. The rest of the application will function normally without it.
 
 ### Pre-built Binaries
 
@@ -224,6 +246,19 @@ wait_before_inject = 10  # Seconds to wait for client init
 | **Convention** | `cdecl` |
 | **Magic Check** | N/A |
 | **Default Var** | `.` |
+
+### Era (Steam)
+
+| Property | Value |
+|----------|-------|
+| **Executable** | `Era.exe` |
+| **Packed** | No |
+| **Detection** | Pattern scanning (Memory.scanSync) |
+| **Convention** | `cdecl` |
+| **Magic Check** | N/A |
+| **Default Var** | `.` |
+
+Era (Steam) uses pattern scanning to find injection targets at runtime, making it more resilient to client updates. Default patterns can be updated in Settings.
 
 ---
 
