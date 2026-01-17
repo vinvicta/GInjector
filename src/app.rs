@@ -717,7 +717,7 @@ impl GInjectorApp {
         self.add_log(LogEntry::info(format!("Compiling: {}", tab.name)));
 
         // Use the gs2-compiler to compile the source code
-        match gs2_compiler::compile(&tab.source_code) {
+        match gs2_compiler::compile(&tab.content) {
             Ok(bytecode) => {
                 self.compiled_bytecode = Some(bytecode.clone());
                 self.add_log(LogEntry::success(format!("Compilation successful: {} bytes", bytecode.len())));
