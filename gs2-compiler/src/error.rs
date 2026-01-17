@@ -4,11 +4,17 @@ use std::fmt;
 
 pub type Result<T> = std::result::Result<T, CompileError>;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SourceLocation {
     pub line: usize,
     pub column: usize,
     pub offset: usize,
+}
+
+impl SourceLocation {
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 impl fmt::Display for SourceLocation {
@@ -60,3 +66,15 @@ impl fmt::Display for CompileError {
 }
 
 impl std::error::Error for CompileError {}
+
+impl CompileError {
+    /// Get the source location of this error, if available
+    pub fn source_location(&self) -> Option<&SourceLocation> {
+        match self {
+            CompileError::Lexer { location, .. } => Some(location),
+            CompileError::Parse { location, .. } => Some(location),
+            CompileError::Compiler { location, .. } => location.as_ref(),
+            CompileError::Io { .. } => None,
+        }
+    }
+}

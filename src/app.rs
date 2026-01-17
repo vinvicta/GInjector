@@ -716,33 +716,27 @@ impl GInjectorApp {
 
         self.add_log(LogEntry::info(format!("Compiling: {}", tab.name)));
 
-        // TODO: Actual compilation using gs2-compiler
-        // For now, generate minimal valid GS2 bytecode
-        // GS2 bytecode uses BIG-ENDIAN (Graal encoding)
-        // - Section 1 (Gs1Flags): type=1, length=4, flags=0
-        // - Section 2 (Functions): type=2, length=0 (no functions)
-        // - Section 3 (Strings): type=3, length=0 (no strings)
-        // - Section 4 (Instructions): type=4, length=1, opcode=Ret (0x4B)
-        let bytecode = vec![
-            // Gs1Flags section
-            0x00, 0x00, 0x00, 0x01,  // section type = 1 (Gs1Flags) - BIG ENDIAN
-            0x00, 0x00, 0x00, 0x04,  // section length = 4 - BIG ENDIAN
-            0x00, 0x00, 0x00, 0x00,  // flags = 0
-            // Functions section (empty)
-            0x00, 0x00, 0x00, 0x02,  // section type = 2 (Functions) - BIG ENDIAN
-            0x00, 0x00, 0x00, 0x00,  // section length = 0 - BIG ENDIAN
-            // Strings section (empty)
-            0x00, 0x00, 0x00, 0x03,  // section type = 3 (Strings) - BIG ENDIAN
-            0x00, 0x00, 0x00, 0x00,  // section length = 0 - BIG ENDIAN
-            // Instructions section
-            0x00, 0x00, 0x00, 0x04,  // section type = 4 (Instructions) - BIG ENDIAN
-            0x00, 0x00, 0x00, 0x01,  // section length = 1 - BIG ENDIAN
-            0x4B,                     // Ret opcode
-        ];
+        // Use the gs2-compiler to compile the source code
+        match gs2_compiler::compile(&tab.source_code) {
+            Ok(bytecode) => {
+                self.compiled_bytecode = Some(bytecode.clone());
+                self.add_log(LogEntry::success(format!("Compilation successful: {} bytes", bytecode.len())));
 
-        self.compiled_bytecode = Some(bytecode.clone());
-        self.add_log(LogEntry::success(format!("Compilation successful: {} bytes (placeholder)", bytecode.len())));
-        self.add_log(LogEntry::info("Note: Using placeholder bytecode. Real compilation coming soon."));
+                // Show first few bytes for debugging
+                let preview = bytecode.iter().take(16).map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+                if !preview.is_empty() {
+                    self.add_log(LogEntry::info(format!("Bytecode preview: {}", preview)));
+                }
+            }
+            Err(e) => {
+                self.add_log(LogEntry::error(format!("Compilation failed: {}", e)));
+
+                // Show detailed error information
+                if let Some(source_loc) = e.source_location() {
+                    self.add_log(LogEntry::info(format!("  at line {}, column {}", source_loc.line, source_loc.column)));
+                }
+            }
+        }
     }
 
     fn inject_bytecode(&mut self) {

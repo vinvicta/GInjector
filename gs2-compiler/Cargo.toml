@@ -3,11 +3,8 @@ name = "gs2-compiler"
 version = "0.1.0"
 edition = "2021"
 
-[build-dependencies]
-lalrpop = "0.20"
-
 [dependencies]
-lalrpop = { version = "0.20", features = ["lexer"] }
+nom = "7.1"
 logos = "0.13"
 thiserror = "1.0"
 anyhow = "1.0"
