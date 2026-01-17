@@ -9,6 +9,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+// Base64 engine trait for decode
+use base64::Engine;
+
 // Re-export frida types
 pub use frida_bridge::{ClientType as FridaClientType, FridaInjector};
 
@@ -47,6 +50,22 @@ impl BytecodeInputMode {
         match self {
             BytecodeInputMode::Hex => "Hex",
             BytecodeInputMode::Raw => "Raw",
+        }
+    }
+}
+
+/// Input mode for decompiler/disassembler
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecompilerInputMode {
+    Hex,    // Space-separated hex
+    Base64, // Base64 encoded bytecode
+}
+
+impl DecompilerInputMode {
+    pub fn name(&self) -> &str {
+        match self {
+            DecompilerInputMode::Hex => "Hex",
+            DecompilerInputMode::Base64 => "Base64",
         }
     }
 }
@@ -229,7 +248,17 @@ pub struct GInjectorApp {
     // UI state
     show_about: bool,
     show_settings: bool,
+    show_decompiler: bool,
+    show_disassembler: bool,
     font_id: egui::FontId,
+
+    // Decompiler/Disassembler state
+    decompiler_input: String,
+    decompiler_output: String,
+    decompiler_input_mode: DecompilerInputMode,
+    disassembler_input: String,
+    disassembler_output: String,
+    disassembler_input_mode: DecompilerInputMode,
 
     // Settings state
     settings_client_type: ClientType,
@@ -335,7 +364,15 @@ impl GInjectorApp {
             compiled_bytecode: None,
             show_about: false,
             show_settings: false,
+            show_decompiler: false,
+            show_disassembler: false,
             font_id: egui::FontId::monospace(14.0),
+            decompiler_input: String::new(),
+            decompiler_output: String::from("// Decompiled code will appear here"),
+            decompiler_input_mode: DecompilerInputMode::Hex,
+            disassembler_input: String::new(),
+            disassembler_output: String::from("// Disassembly will appear here"),
+            disassembler_input_mode: DecompilerInputMode::Hex,
             settings_client_type: client_type,
             edit_constructor_offset,
             edit_setscript_offset,
@@ -1008,6 +1045,98 @@ impl GInjectorApp {
             self.load_offsets_for_settings_client();
         }
     }
+
+    fn run_decompiler(&mut self) {
+        let input = self.decompiler_input.trim();
+        if input.is_empty() {
+            self.decompiler_output = "// No input provided".to_string();
+            return;
+        }
+
+        // Parse bytecode based on input mode
+        let bytecode = match self.decompiler_input_mode {
+            DecompilerInputMode::Hex => {
+                match crate::bytecode_analyzer::hex_to_bytecode(input) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        self.decompiler_output = format!("// Error parsing hex: {}", e);
+                        return;
+                    }
+                }
+            }
+            DecompilerInputMode::Base64 => {
+                match base64::engine::general_purpose::STANDARD.decode(input) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        self.decompiler_output = format!("// Error parsing base64: {}", e);
+                        return;
+                    }
+                }
+            }
+        };
+
+        // Decompile
+        match crate::bytecode_analyzer::decompile_bytecode(&bytecode) {
+            Ok(code) => {
+                self.decompiler_output = code;
+            }
+            Err(e) => {
+                self.decompiler_output = format!("// Decompilation error: {}", e);
+            }
+        }
+    }
+
+    fn run_disassembler(&mut self) {
+        let input = self.disassembler_input.trim();
+        if input.is_empty() {
+            self.disassembler_output = "// No input provided".to_string();
+            return;
+        }
+
+        // Parse bytecode based on input mode
+        let bytecode = match self.disassembler_input_mode {
+            DecompilerInputMode::Hex => {
+                match crate::bytecode_analyzer::hex_to_bytecode(input) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        self.disassembler_output = format!("// Error parsing hex: {}", e);
+                        return;
+                    }
+                }
+            }
+            DecompilerInputMode::Base64 => {
+                match base64::engine::general_purpose::STANDARD.decode(input) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        self.disassembler_output = format!("// Error parsing base64: {}", e);
+                        return;
+                    }
+                }
+            }
+        };
+
+        // Disassemble
+        match crate::bytecode_analyzer::disassemble_bytecode(&bytecode) {
+            Ok(code) => {
+                self.disassembler_output = code;
+            }
+            Err(e) => {
+                self.disassembler_output = format!("// Disassembly error: {}", e);
+            }
+        }
+    }
+
+    /// Get decompiled code for the current bytecode preview
+    fn get_bytecode_preview(&self) -> String {
+        if let Some(bytecode) = &self.compiled_bytecode {
+            match crate::bytecode_analyzer::decompile_bytecode(bytecode) {
+                Ok(code) => code,
+                Err(e) => format!("// Decompilation error: {}", e),
+            }
+        } else {
+            "// No bytecode compiled yet".to_string()
+        }
+    }
 }
 
 impl eframe::App for GInjectorApp {
@@ -1105,10 +1234,15 @@ impl eframe::App for GInjectorApp {
                 });
 
                 ui.menu_button("Tools", |ui| {
-                    if ui.button("Toggle Client").clicked() {
-                        self.toggle_client();
+                    if ui.button("Decompiler").clicked() {
+                        self.show_decompiler = true;
                         ui.close_menu();
                     }
+                    if ui.button("Disassembler").clicked() {
+                        self.show_disassembler = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("Settings").clicked() {
                         self.open_settings();
                         ui.close_menu();
@@ -1381,43 +1515,70 @@ impl eframe::App for GInjectorApp {
             });
         });
 
-        // Bottom panel for logs
-        egui::TopBottomPanel::bottom("log_panel").default_height(150.0).max_height(150.0).show(ctx, |ui| {
+        // Bottom panel for logs and bytecode preview
+        egui::TopBottomPanel::bottom("log_panel").default_height(200.0).max_height(400.0).show(ctx, |ui| {
+            // Split into two columns: logs and bytecode preview
             ui.horizontal(|ui| {
-                ui.label("Logs:");
-                if ui.button("Clear").clicked() {
-                    self.logs.clear();
-                }
-            });
-
-            egui::ScrollArea::vertical()
-                .id_salt("log_scroll")
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-
-                        for log in &self.logs {
-                            let color = match log.level {
-                                LogLevel::Info => egui::Color32::GRAY,
-                                LogLevel::Success => egui::Color32::GREEN,
-                                LogLevel::Warning => egui::Color32::YELLOW,
-                                LogLevel::Error => egui::Color32::RED,
-                            };
-
-                            ui.horizontal(|ui| {
-                                ui.colored_label(egui::Color32::DARK_GRAY, &log.timestamp);
-                                ui.colored_label(color, match log.level {
-                                    LogLevel::Info => ">",
-                                    LogLevel::Success => "✓",
-                                    LogLevel::Warning => "⚠",
-                                    LogLevel::Error => "✗",
-                                });
-                                ui.label(&log.message);
-                            });
+                // Logs column (left)
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Logs:");
+                        if ui.button("Clear").clicked() {
+                            self.logs.clear();
                         }
                     });
+
+                    egui::ScrollArea::vertical()
+                        .id_salt("log_scroll")
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 2.0;
+
+                                for log in &self.logs {
+                                    let color = match log.level {
+                                        LogLevel::Info => egui::Color32::GRAY,
+                                        LogLevel::Success => egui::Color32::GREEN,
+                                        LogLevel::Warning => egui::Color32::YELLOW,
+                                        LogLevel::Error => egui::Color32::RED,
+                                    };
+
+                                    ui.horizontal(|ui| {
+                                        ui.colored_label(egui::Color32::DARK_GRAY, &log.timestamp);
+                                        ui.colored_label(color, match log.level {
+                                            LogLevel::Info => ">",
+                                            LogLevel::Success => "✓",
+                                            LogLevel::Warning => "⚠",
+                                            LogLevel::Error => "✗",
+                                        });
+                                        ui.label(&log.message);
+                                    });
+                                }
+                            });
+                        });
                 });
+
+                // Separator
+                ui.separator();
+
+                // Bytecode preview column (right)
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Bytecode Preview:");
+                        ui.label(egui::RichText::new("(what will be injected)").size(12.0).color(egui::Color32::GRAY));
+                    });
+
+                    let preview = self.get_bytecode_preview();
+                    egui::ScrollArea::vertical()
+                        .id_salt("preview_scroll")
+                        .show(ui, |ui| {
+                            // Split preview into lines and display each
+                            for line in preview.lines() {
+                                ui.label(egui::RichText::new(line).font(self.font_id.clone()).monospace());
+                            }
+                        });
+                });
+            });
         });
 
         // Status bar
@@ -1594,6 +1755,138 @@ impl eframe::App for GInjectorApp {
                             "You need to reverse engineer the client to find new offsets."
                         );
                     });
+                });
+        }
+
+        // Decompiler window
+        if self.show_decompiler {
+            egui::Window::new("GS2 Decompiler")
+                .collapsible(false)
+                .resizable(true)
+                .default_width(800.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Input Mode:");
+                        for mode in [DecompilerInputMode::Hex, DecompilerInputMode::Base64] {
+                            if ui.selectable_value(
+                                &mut self.decompiler_input_mode,
+                                mode,
+                                mode.name()
+                            ).changed() {}
+                        }
+                    });
+
+                    ui.separator();
+
+                    // Input area
+                    ui.label("Bytecode Input:");
+                    egui::ScrollArea::vertical()
+                        .max_height(150.0)
+                        .show(ui, |ui| {
+                            ui.add_sized(
+                                [ui.available_width(), 120.0],
+                                egui::TextEdit::multiline(&mut self.decompiler_input)
+                                    .font(self.font_id.clone())
+                                    .hint_text("Paste bytecode here (hex or base64)...")
+                            );
+                        });
+
+                    ui.separator();
+
+                    // Action buttons
+                    ui.horizontal(|ui| {
+                        if ui.button("Decompile").clicked() {
+                            self.run_decompiler();
+                        }
+                        if ui.button("Clear").clicked() {
+                            self.decompiler_input.clear();
+                            self.decompiler_output = "// Decompiled code will appear here".to_string();
+                        }
+                        if ui.button("Close").clicked() {
+                            self.show_decompiler = false;
+                        }
+                    });
+
+                    ui.separator();
+
+                    // Output area
+                    ui.label("Decompiled GS2 Code:");
+                    egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            ui.add_sized(
+                                [ui.available_width(), 280.0],
+                                egui::TextEdit::multiline(&mut self.decompiler_output)
+                                    .font(self.font_id.clone())
+                                    .interactive(false)
+                            );
+                        });
+                });
+        }
+
+        // Disassembler window
+        if self.show_disassembler {
+            egui::Window::new("GS2 Disassembler")
+                .collapsible(false)
+                .resizable(true)
+                .default_width(800.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Input Mode:");
+                        for mode in [DecompilerInputMode::Hex, DecompilerInputMode::Base64] {
+                            if ui.selectable_value(
+                                &mut self.disassembler_input_mode,
+                                mode,
+                                mode.name()
+                            ).changed() {}
+                        }
+                    });
+
+                    ui.separator();
+
+                    // Input area
+                    ui.label("Bytecode Input:");
+                    egui::ScrollArea::vertical()
+                        .max_height(150.0)
+                        .show(ui, |ui| {
+                            ui.add_sized(
+                                [ui.available_width(), 120.0],
+                                egui::TextEdit::multiline(&mut self.disassembler_input)
+                                    .font(self.font_id.clone())
+                                    .hint_text("Paste bytecode here (hex or base64)...")
+                            );
+                        });
+
+                    ui.separator();
+
+                    // Action buttons
+                    ui.horizontal(|ui| {
+                        if ui.button("Disassemble").clicked() {
+                            self.run_disassembler();
+                        }
+                        if ui.button("Clear").clicked() {
+                            self.disassembler_input.clear();
+                            self.disassembler_output = "// Disassembly will appear here".to_string();
+                        }
+                        if ui.button("Close").clicked() {
+                            self.show_disassembler = false;
+                        }
+                    });
+
+                    ui.separator();
+
+                    // Output area
+                    ui.label("Disassembly:");
+                    egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            ui.add_sized(
+                                [ui.available_width(), 280.0],
+                                egui::TextEdit::multiline(&mut self.disassembler_output)
+                                    .font(self.font_id.clone())
+                                    .interactive(false)
+                            );
+                        });
                 });
         }
     }

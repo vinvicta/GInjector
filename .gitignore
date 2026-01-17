@@ -58,3 +58,4 @@ tmp/
 .tmp.*
 *.tmp
 gs2-parser/
+gbf-rs/

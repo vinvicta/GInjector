@@ -3,6 +3,7 @@
 //! A graphical IDE for GS2 scripting with integrated compilation and Frida injection.
 
 mod app;
+mod bytecode_analyzer;
 mod config;
 
 use app::GInjectorApp;
