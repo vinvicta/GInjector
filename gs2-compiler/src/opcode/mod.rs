@@ -143,12 +143,22 @@ pub enum Opcode {
 
     // Reserved identifiers (0xb4 - 0xbe)
     This = 0xb4,
-    Thiso = 0xb5,
+    ThisO = 0xb5,
     Player = 0xb6,
-    Playero = 0xb7,
+    PlayerO = 0xb7,
     Level = 0xb8,
     Temp = 0xbd,
     Params = 0xbe,
+
+    // Immediate operand encoders (0xf0 - 0xf6)
+    // These are NOT standalone opcodes - they encode operands for the previous instruction
+    ImmStringByte = 0xf0,
+    ImmStringShort = 0xf1,
+    ImmStringInt = 0xf2,
+    ImmByte = 0xf3,
+    ImmShort = 0xf4,
+    ImmInt = 0xf5,
+    ImmFloat = 0xf6,
 }
 
 impl Opcode {
@@ -173,9 +183,9 @@ impl Opcode {
         matches!(
             self,
             Self::This
-                | Self::Thiso
+                | Self::ThisO
                 | Self::Player
-                | Self::Playero
+                | Self::PlayerO
                 | Self::Level
                 | Self::Temp
         )
@@ -186,9 +196,9 @@ impl Opcode {
         matches!(
             self,
             Self::This
-                | Self::Thiso
+                | Self::ThisO
                 | Self::Player
-                | Self::Playero
+                | Self::PlayerO
                 | Self::Level
                 | Self::Temp
         )
@@ -308,13 +318,34 @@ impl Opcode {
             Self::WithEnd => "WITH_END",
             Self::ForEach => "FOR_EACH",
             Self::This => "THIS",
-            Self::Thiso => "THISO",
+            Self::ThisO => "THIS_O",
             Self::Player => "PLAYER",
-            Self::Playero => "PLAYERO",
+            Self::PlayerO => "PLAYER_O",
             Self::Level => "LEVEL",
             Self::Temp => "TEMP",
             Self::Params => "PARAMS",
+            Self::ImmStringByte => "IMM_STRING_BYTE",
+            Self::ImmStringShort => "IMM_STRING_SHORT",
+            Self::ImmStringInt => "IMM_STRING_INT",
+            Self::ImmByte => "IMM_BYTE",
+            Self::ImmShort => "IMM_SHORT",
+            Self::ImmInt => "IMM_INT",
+            Self::ImmFloat => "IMM_FLOAT",
         }
+    }
+
+    /// Check if this is an immediate operand encoder (not a real opcode)
+    pub fn is_immediate_encoder(self) -> bool {
+        matches!(
+            self,
+            Self::ImmStringByte
+                | Self::ImmStringShort
+                | Self::ImmStringInt
+                | Self::ImmByte
+                | Self::ImmShort
+                | Self::ImmInt
+                | Self::ImmFloat
+        )
     }
 
     /// Convert from u8 to Opcode, returning None for invalid values
@@ -431,13 +462,42 @@ impl Opcode {
             0x97 => Some(Self::WithEnd),
             0xa3 => Some(Self::ForEach),
             0xb4 => Some(Self::This),
-            0xb5 => Some(Self::Thiso),
+            0xb5 => Some(Self::ThisO),
             0xb6 => Some(Self::Player),
-            0xb7 => Some(Self::Playero),
+            0xb7 => Some(Self::PlayerO),
             0xb8 => Some(Self::Level),
             0xbd => Some(Self::Temp),
             0xbe => Some(Self::Params),
+            0xf0 => Some(Self::ImmStringByte),
+            0xf1 => Some(Self::ImmStringShort),
+            0xf2 => Some(Self::ImmStringInt),
+            0xf3 => Some(Self::ImmByte),
+            0xf4 => Some(Self::ImmShort),
+            0xf5 => Some(Self::ImmInt),
+            0xf6 => Some(Self::ImmFloat),
             _ => None,
+        }
+    }
+
+    /// Get the immediate encoder opcode for a string index
+    pub fn string_index_to_immediate(index: u32) -> Self {
+        if index <= 0xFF {
+            Self::ImmStringByte
+        } else if index <= 0xFFFF {
+            Self::ImmStringShort
+        } else {
+            Self::ImmStringInt
+        }
+    }
+
+    /// Get the immediate encoder opcode for a number value
+    pub fn number_to_immediate(value: i32) -> Self {
+        if value >= i8::MIN as i32 && value <= i8::MAX as i32 {
+            Self::ImmByte
+        } else if value >= i16::MIN as i32 && value <= i16::MAX as i32 {
+            Self::ImmShort
+        } else {
+            Self::ImmInt
         }
     }
 }
