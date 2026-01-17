@@ -50,10 +50,12 @@ pub fn decompile_bytecode(bytecode: &[u8]) -> AnalysisResult<String> {
         return Err(AnalysisError::NoBytecode);
     }
 
-    let cursor = Cursor::new(bytecode);
+    // Convert to Vec<u8> to owned data for 'static lifetime requirement
+    let bytecode_vec = bytecode.to_vec();
+    let cursor = Cursor::new(bytecode_vec);
 
     // Build the module from bytecode
-    let module = ModuleBuilder::new()
+    let _module = ModuleBuilder::new()
         .name("input.gs2")
         .reader(Box::new(cursor))
         .build()

@@ -316,7 +316,7 @@ impl GInjectorApp {
 
         // Spawn background thread for status checking (doesn't block UI)
         thread::spawn(move || {
-            let mut tx = status_tx;
+            let tx = status_tx;
             let mut last_frida = false;
             let mut last_process = false;
             let mut tick: u32 = 0;
