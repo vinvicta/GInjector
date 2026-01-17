@@ -5,7 +5,6 @@
 /// Graal client type for injection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientType {
-    GraalV6,
     GraalWorlds,
     EraSteam,
 }
@@ -13,7 +12,6 @@ pub enum ClientType {
 impl ClientType {
     pub fn name(&self) -> &'static str {
         match self {
-            ClientType::GraalV6 => "Graal V6",
             ClientType::GraalWorlds => "Graal Worlds",
             ClientType::EraSteam => "Era (Steam)",
         }
@@ -21,7 +19,6 @@ impl ClientType {
 
     pub fn target_module(&self) -> &'static str {
         match self {
-            ClientType::GraalV6 => "Graal.exe",
             ClientType::GraalWorlds => "Worlds.exe",
             ClientType::EraSteam => "Era.exe",
         }
@@ -29,7 +26,6 @@ impl ClientType {
 
     pub fn default_variable_name(&self) -> &'static str {
         match self {
-            ClientType::GraalV6 => "VarName",
             ClientType::GraalWorlds => ".",
             ClientType::EraSteam => ".",
         }
@@ -38,7 +34,6 @@ impl ClientType {
     /// Offset to TGraalVar constructor
     pub fn tgralvar_constructor_offset(&self) -> usize {
         match self {
-            ClientType::GraalV6 => 0x195770,
             ClientType::GraalWorlds => 0x9A340,
             ClientType::EraSteam => 0x0, // Placeholder - needs to be found
         }
@@ -47,7 +42,6 @@ impl ClientType {
     /// Offset to TGraalVar::SetScript method
     pub fn tgralvar_setscript_offset(&self) -> usize {
         match self {
-            ClientType::GraalV6 => 0x196290,
             ClientType::GraalWorlds => 0x9EDE0,
             ClientType::EraSteam => 0x0, // Placeholder - needs to be found
         }
@@ -56,7 +50,6 @@ impl ClientType {
     /// Whether to use thiscall calling convention
     pub fn uses_thiscall(&self) -> bool {
         match self {
-            ClientType::GraalV6 => true,
             ClientType::GraalWorlds => false,
             ClientType::EraSteam => false, // Era uses fastcall/stdcall like Worlds
         }
@@ -65,7 +58,6 @@ impl ClientType {
     /// Magic number check offset (V6 only)
     pub fn magic_check_offset(&self) -> Option<usize> {
         match self {
-            ClientType::GraalV6 => Some(0x17da90),
             ClientType::GraalWorlds => None,
             ClientType::EraSteam => None,
         }
@@ -74,7 +66,6 @@ impl ClientType {
     /// Magic number value to wait for
     pub fn magic_check_value(&self) -> Option<u32> {
         match self {
-            ClientType::GraalV6 => Some(157876074),
             ClientType::GraalWorlds => None,
             ClientType::EraSteam => None,
         }
@@ -478,17 +469,6 @@ mod tests {
     }
 
     #[test]
-    fn test_client_type_v6_offsets() {
-        let client = ClientType::GraalV6;
-        assert_eq!(client.target_module(), "Graal.exe");
-        assert_eq!(client.tgralvar_constructor_offset(), 0x195770);
-        assert_eq!(client.tgralvar_setscript_offset(), 0x196290);
-        assert_eq!(client.magic_check_offset(), Some(0x17da90));
-        assert_eq!(client.magic_check_value(), Some(157876074));
-        assert!(client.uses_thiscall());
-    }
-
-    #[test]
     fn test_client_type_worlds_offsets() {
         let client = ClientType::GraalWorlds;
         assert_eq!(client.target_module(), "Worlds.exe");
@@ -497,23 +477,6 @@ mod tests {
         assert_eq!(client.magic_check_offset(), None);
         assert_eq!(client.magic_check_value(), None);
         assert!(!client.uses_thiscall());
-    }
-
-    #[test]
-    fn test_generate_injection_script_v6() {
-        let injector = FridaInjector::new(ClientType::GraalV6);
-        let script = injector.generate_injection_script("00 01 02", "TestVar");
-
-        assert!(script.contains("Graal V6"));
-        assert!(script.contains("0x195770"));
-        assert!(script.contains("0x196290"));
-        assert!(script.contains("thiscall"));
-        assert!(script.contains("157876074"));
-        assert!(script.contains("TestVar"));
-        assert!(script.contains("00 01 02"));
-        // Key fix: 10 second wait before injection
-        assert!(script.contains("await sleep(10000)"));
-        assert!(script.contains("Waiting 10 seconds before injecting"));
     }
 
     #[test]

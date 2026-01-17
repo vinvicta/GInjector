@@ -7,21 +7,19 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ClientType {
-    GraalV6,
     GraalWorlds,
     EraSteam,
 }
 
 impl Default for ClientType {
     fn default() -> Self {
-        Self::GraalV6
+        Self::GraalWorlds
     }
 }
 
 impl ClientType {
     pub fn name(&self) -> &'static str {
         match self {
-            ClientType::GraalV6 => "Graal V6",
             ClientType::GraalWorlds => "Graal Worlds",
             ClientType::EraSteam => "Era (Steam)",
         }
@@ -29,7 +27,6 @@ impl ClientType {
 
     pub fn target_process(&self) -> &'static str {
         match self {
-            ClientType::GraalV6 => "Graal.exe",
             ClientType::GraalWorlds => "Worlds.exe",
             ClientType::EraSteam => "Era.exe",
         }
@@ -37,7 +34,6 @@ impl ClientType {
 
     pub fn default_variable_name(&self) -> &'static str {
         match self {
-            ClientType::GraalV6 => "VarName",
             ClientType::GraalWorlds => ".",
             ClientType::EraSteam => ".",
         }
@@ -46,17 +42,6 @@ impl ClientType {
     /// Get default offsets for this client type
     pub fn default_offsets(&self) -> ClientOffsets {
         match self {
-            ClientType::GraalV6 => ClientOffsets {
-                constructor_offset: "0x195770".to_string(),
-                setscript_offset: "0x196290".to_string(),
-                uses_thiscall: true,
-                magic_check_offset: Some("0x17da90".to_string()),
-                magic_check_value: Some(157876074),
-                use_pattern_scanning: false,
-                constructor_pattern: None,
-                setscript_pattern: None,
-                pattern_index: None,
-            },
             ClientType::GraalWorlds => ClientOffsets {
                 constructor_offset: "0x9A340".to_string(),
                 setscript_offset: "0x9EDE0".to_string(),
@@ -89,7 +74,7 @@ impl ClientType {
 
     /// Get all client types as a slice for dropdowns
     pub fn all() -> &'static [ClientType] {
-        &[ClientType::GraalV6, ClientType::GraalWorlds, ClientType::EraSteam]
+        &[ClientType::GraalWorlds, ClientType::EraSteam]
     }
 }
 
@@ -175,9 +160,6 @@ pub struct Config {
 /// Custom offsets configuration for each client type
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OffsetsConfig {
-    /// Custom offsets for Graal V6 (null means use defaults)
-    pub graalv6: Option<ClientOffsets>,
-
     /// Custom offsets for Graal Worlds (null means use defaults)
     pub graalworlds: Option<ClientOffsets>,
 
@@ -188,7 +170,6 @@ pub struct OffsetsConfig {
 impl Default for OffsetsConfig {
     fn default() -> Self {
         Self {
-            graalv6: None,
             graalworlds: None,
             era_steam: None,
         }
@@ -222,7 +203,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             gs2_compiler_path: PathBuf::from("./gs2-parser/bin/gs2test"),
-            client_type: ClientType::GraalV6,
+            client_type: ClientType::GraalWorlds,
             default_variable_name: None,
             offsets: OffsetsConfig::default(),
             editor: EditorConfig {
@@ -274,11 +255,6 @@ impl Config {
     /// Returns custom offsets if set, otherwise returns defaults
     pub fn get_offsets(&self) -> ClientOffsets {
         match self.client_type {
-            ClientType::GraalV6 => {
-                self.offsets.graalv6
-                    .clone()
-                    .unwrap_or_else(|| self.client_type.default_offsets())
-            }
             ClientType::GraalWorlds => {
                 self.offsets.graalworlds
                     .clone()
@@ -295,9 +271,6 @@ impl Config {
     /// Set custom offsets for the current client type
     pub fn set_offsets(&mut self, offsets: ClientOffsets) {
         match self.client_type {
-            ClientType::GraalV6 => {
-                self.offsets.graalv6 = Some(offsets);
-            }
             ClientType::GraalWorlds => {
                 self.offsets.graalworlds = Some(offsets);
             }
@@ -310,9 +283,6 @@ impl Config {
     /// Reset offsets for the current client type to defaults
     pub fn reset_offsets(&mut self) {
         match self.client_type {
-            ClientType::GraalV6 => {
-                self.offsets.graalv6 = None;
-            }
             ClientType::GraalWorlds => {
                 self.offsets.graalworlds = None;
             }
@@ -325,7 +295,6 @@ impl Config {
     /// Check if current client is using custom offsets
     pub fn has_custom_offsets(&self) -> bool {
         match self.client_type {
-            ClientType::GraalV6 => self.offsets.graalv6.is_some(),
             ClientType::GraalWorlds => self.offsets.graalworlds.is_some(),
             ClientType::EraSteam => self.offsets.era_steam.is_some(),
         }
@@ -334,7 +303,6 @@ impl Config {
     /// Check if a specific client type is using custom offsets
     pub fn has_custom_offsets_for(&self, client_type: ClientType) -> bool {
         match client_type {
-            ClientType::GraalV6 => self.offsets.graalv6.is_some(),
             ClientType::GraalWorlds => self.offsets.graalworlds.is_some(),
             ClientType::EraSteam => self.offsets.era_steam.is_some(),
         }

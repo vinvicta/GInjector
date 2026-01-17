@@ -763,7 +763,6 @@ impl GInjectorApp {
         };
 
         let frida_client_type = match self.client_type {
-            ClientType::GraalV6 => FridaClientType::GraalV6,
             ClientType::GraalWorlds => FridaClientType::GraalWorlds,
             ClientType::EraSteam => FridaClientType::EraSteam,
         };
@@ -857,9 +856,8 @@ impl GInjectorApp {
 
     fn toggle_client(&mut self) {
         self.client_type = match self.client_type {
-            ClientType::GraalV6 => ClientType::GraalWorlds,
             ClientType::GraalWorlds => ClientType::EraSteam,
-            ClientType::EraSteam => ClientType::GraalV6,
+            ClientType::EraSteam => ClientType::GraalWorlds,
         };
         self.add_log(LogEntry::info(format!(
             "Switched to {}",
@@ -911,9 +909,8 @@ impl GInjectorApp {
 
     fn toggle_settings_client_type(&mut self) {
         self.settings_client_type = match self.settings_client_type {
-            ClientType::GraalV6 => ClientType::GraalWorlds,
             ClientType::GraalWorlds => ClientType::EraSteam,
-            ClientType::EraSteam => ClientType::GraalV6,
+            ClientType::EraSteam => ClientType::GraalWorlds,
         };
         self.load_offsets_for_settings_client();
     }
@@ -952,40 +949,9 @@ impl GInjectorApp {
         }
 
         // Build new offsets struct - use settings_client_type
-        let uses_thiscall = self.settings_client_type == ClientType::GraalV6;
+        let uses_thiscall = false; // GraalWorlds and EraSteam don't use thiscall
 
-        let (magic_offset, magic_value) = if self.settings_client_type == ClientType::GraalV6 {
-            let magic_offset_str = self.edit_magic_check_offset.trim();
-            let magic_value_str = self.edit_magic_check_value.trim();
-
-            let magic_offset = if magic_offset_str.is_empty() {
-                None
-            } else {
-                match crate::config::ClientOffsets::parse_offset(magic_offset_str) {
-                    Ok(_) => Some(magic_offset_str.to_string()),
-                    Err(e) => {
-                        self.add_log(LogEntry::error(format!("Invalid magic offset: {}", e)));
-                        return;
-                    }
-                }
-            };
-
-            let magic_value = if magic_value_str.is_empty() {
-                None
-            } else {
-                match magic_value_str.parse::<u32>() {
-                    Ok(v) => Some(v),
-                    Err(_) => {
-                        self.add_log(LogEntry::error("Invalid magic check value"));
-                        return;
-                    }
-                }
-            };
-
-            (magic_offset, magic_value)
-        } else {
-            (None, None)
-        };
+        let (magic_offset, magic_value) = (None, None); // Only V6 had magic checks
 
         // Parse pattern index
         let pattern_index = if self.edit_pattern_index.trim().is_empty() {
@@ -1688,24 +1654,6 @@ impl eframe::App for GInjectorApp {
                         ui.add(egui::TextEdit::singleline(&mut self.edit_setscript_offset)
                             .hint_text("0x...")
                             .font(egui::FontId::monospace(14.0)));
-
-                        // Magic check offset (V6 only)
-                        if self.settings_client_type == ClientType::GraalV6 {
-                            ui.separator();
-                            ui.label("Magic Check (V6 only):");
-                            ui.horizontal(|ui| {
-                                ui.label("Offset:");
-                                ui.add(egui::TextEdit::singleline(&mut self.edit_magic_check_offset)
-                                    .hint_text("0x...")
-                                    .font(egui::FontId::monospace(14.0)));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Value:");
-                                ui.add(egui::TextEdit::singleline(&mut self.edit_magic_check_value)
-                                    .hint_text("157876074")
-                                    .font(egui::FontId::monospace(14.0)));
-                            });
-                        }
 
                         // Pattern scanning section (for all clients, mainly Era)
                         ui.separator();
