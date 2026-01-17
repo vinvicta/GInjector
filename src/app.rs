@@ -237,6 +237,11 @@ pub struct GInjectorApp {
     edit_setscript_offset: String,
     edit_magic_check_offset: String,
     edit_magic_check_value: String,
+    // Pattern scanning fields
+    edit_use_pattern_scanning: bool,
+    edit_constructor_pattern: String,
+    edit_setscript_pattern: String,
+    edit_pattern_index: String,
 
     // Status update receiver (from background thread)
     status_rx: mpsc::Receiver<(bool, bool)>,  // (frida_available, process_running)
@@ -272,6 +277,10 @@ impl GInjectorApp {
         let edit_setscript_offset = offsets.setscript_offset.clone();
         let edit_magic_check_offset = offsets.magic_check_offset.clone().unwrap_or_default();
         let edit_magic_check_value = offsets.magic_check_value.map(|v| v.to_string()).unwrap_or_default();
+        let edit_use_pattern_scanning = offsets.use_pattern_scanning;
+        let edit_constructor_pattern = offsets.constructor_pattern.clone().unwrap_or_default();
+        let edit_setscript_pattern = offsets.setscript_pattern.clone().unwrap_or_default();
+        let edit_pattern_index = offsets.pattern_index.map(|v| v.to_string()).unwrap_or_default();
 
         // Create channel for status updates from background thread
         let (status_tx, status_rx) = mpsc::channel();
@@ -332,6 +341,10 @@ impl GInjectorApp {
             edit_setscript_offset,
             edit_magic_check_offset,
             edit_magic_check_value,
+            edit_use_pattern_scanning,
+            edit_constructor_pattern,
+            edit_setscript_pattern,
+            edit_pattern_index,
             status_rx,
             injection_rx,
             injection_in_progress: false,
@@ -717,6 +730,10 @@ impl GInjectorApp {
                 uses_thiscall: offsets.uses_thiscall,
                 magic_check_offset: offsets.magic_check_offset_usize().ok().flatten(),
                 magic_check_value: offsets.magic_check_value,
+                use_pattern_scanning: offsets.use_pattern_scanning,
+                constructor_pattern: offsets.constructor_pattern.clone(),
+                setscript_pattern: offsets.setscript_pattern.clone(),
+                pattern_index: offsets.pattern_index,
             };
             FridaInjector::with_offsets(frida_client_type, custom_offsets)
         } else {
@@ -831,6 +848,10 @@ impl GInjectorApp {
         self.edit_setscript_offset = offsets.setscript_offset.clone();
         self.edit_magic_check_offset = offsets.magic_check_offset.clone().unwrap_or_default();
         self.edit_magic_check_value = offsets.magic_check_value.map(|v| v.to_string()).unwrap_or_default();
+        self.edit_use_pattern_scanning = offsets.use_pattern_scanning;
+        self.edit_constructor_pattern = offsets.constructor_pattern.clone().unwrap_or_default();
+        self.edit_setscript_pattern = offsets.setscript_pattern.clone().unwrap_or_default();
+        self.edit_pattern_index = offsets.pattern_index.map(|v| v.to_string()).unwrap_or_default();
     }
 
     fn toggle_settings_client_type(&mut self) {
@@ -911,12 +932,42 @@ impl GInjectorApp {
             (None, None)
         };
 
+        // Parse pattern index
+        let pattern_index = if self.edit_pattern_index.trim().is_empty() {
+            None
+        } else {
+            match self.edit_pattern_index.trim().parse::<usize>() {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    self.add_log(LogEntry::error("Invalid pattern index (must be a number)"));
+                    return;
+                }
+            }
+        };
+
+        // Parse pattern fields
+        let constructor_pattern = if self.edit_constructor_pattern.trim().is_empty() {
+            None
+        } else {
+            Some(self.edit_constructor_pattern.trim().to_string())
+        };
+
+        let setscript_pattern = if self.edit_setscript_pattern.trim().is_empty() {
+            None
+        } else {
+            Some(self.edit_setscript_pattern.trim().to_string())
+        };
+
         let offsets = ClientOffsets {
             constructor_offset: constructor.to_string(),
             setscript_offset: setscript.to_string(),
             uses_thiscall,
             magic_check_offset: magic_offset,
             magic_check_value: magic_value,
+            use_pattern_scanning: self.edit_use_pattern_scanning,
+            constructor_pattern,
+            setscript_pattern,
+            pattern_index,
         };
 
         // Save to config - temporarily set client type to save to correct offsets
@@ -1476,6 +1527,44 @@ impl eframe::App for GInjectorApp {
                                 ui.add(egui::TextEdit::singleline(&mut self.edit_magic_check_value)
                                     .hint_text("157876074")
                                     .font(egui::FontId::monospace(14.0)));
+                            });
+                        }
+
+                        // Pattern scanning section (for all clients, mainly Era)
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("Use Pattern Scanning:");
+                            if ui.checkbox(&mut self.edit_use_pattern_scanning, "").changed() {
+                                // Checkbox changed
+                            }
+                        });
+                        ui.label("If enabled, uses Memory.scanSync to find function addresses");
+
+                        if self.edit_use_pattern_scanning {
+                            ui.separator();
+                            ui.label("Pattern Scanning:");
+                            ui.horizontal(|ui| {
+                                ui.label("Constructor Pattern:");
+                            });
+                            ui.add(egui::TextEdit::singleline(&mut self.edit_constructor_pattern)
+                                .hint_text("e.g., 40 53 48 83 EC 20 48 8B D9 ?? ?? ?? ??")
+                                .font(egui::FontId::monospace(14.0))
+                                .desired_width(f32::INFINITY));
+
+                            ui.horizontal(|ui| {
+                                ui.label("SetScript Pattern:");
+                            });
+                            ui.add(egui::TextEdit::singleline(&mut self.edit_setscript_pattern)
+                                .hint_text("e.g., 48 89 ?? ?? ?? 57 48 ?? ?? ?? 48 8B DA")
+                                .font(egui::FontId::monospace(14.0))
+                                .desired_width(f32::INFINITY));
+
+                            ui.horizontal(|ui| {
+                                ui.label("Pattern Index:");
+                                ui.add(egui::TextEdit::singleline(&mut self.edit_pattern_index)
+                                    .hint_text("0")
+                                    .font(egui::FontId::monospace(14.0)));
+                                ui.label("(which match to use if multiple found)");
                             });
                         }
 

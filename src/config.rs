@@ -52,6 +52,10 @@ impl ClientType {
                 uses_thiscall: true,
                 magic_check_offset: Some("0x17da90".to_string()),
                 magic_check_value: Some(157876074),
+                use_pattern_scanning: false,
+                constructor_pattern: None,
+                setscript_pattern: None,
+                pattern_index: None,
             },
             ClientType::GraalWorlds => ClientOffsets {
                 constructor_offset: "0x9A340".to_string(),
@@ -59,15 +63,26 @@ impl ClientType {
                 uses_thiscall: false,
                 magic_check_offset: None,
                 magic_check_value: None,
+                use_pattern_scanning: false,
+                constructor_pattern: None,
+                setscript_pattern: None,
+                pattern_index: None,
             },
             ClientType::EraSteam => ClientOffsets {
-                // Era (Steam) offsets - to be determined via reverse engineering
-                // These are placeholder values that need to be updated
+                // Era (Steam) uses pattern scanning from the ESP hack
                 constructor_offset: "0x0".to_string(),
                 setscript_offset: "0x0".to_string(),
-                uses_thiscall: false, // Era uses fastcall/stdcall like Worlds
+                uses_thiscall: false,
                 magic_check_offset: None,
                 magic_check_value: None,
+                use_pattern_scanning: true,
+                constructor_pattern: Some(
+                    "40 53 48 83 EC 20 48 8B D9 E8 ?? ?? ?? ?? 48 ?? ?? ?? ?? ?? ?? C7 ?? ?? ?? 00 00 00 48 ?? ?? ?? ?? ?? ?? ?? ?? 66 C7".to_string()
+                ),
+                setscript_pattern: Some(
+                    "48 89 ?? ?? ?? 57 48 ?? ?? ?? 48 8B DA 48 8B F9 E8 ?? ?? ?? ?? ?? ?? ?? ?? 48 ?? ?? 48 ?? ?? ?? ?? 48 ?? ?? ?? 5F".to_string()
+                ),
+                pattern_index: Some(0),
             },
         }
     }
@@ -95,6 +110,19 @@ pub struct ClientOffsets {
 
     /// Magic check value for V6 (optional)
     pub magic_check_value: Option<u32>,
+
+    /// Whether to use pattern scanning instead of static offsets
+    /// (Era/Steam uses Memory.scanSync to find addresses)
+    pub use_pattern_scanning: bool,
+
+    /// Byte pattern for TGraalVar constructor (e.g., "40 53 48 83 EC 20 48 8B D9 ?? ?? ?? ??")
+    pub constructor_pattern: Option<String>,
+
+    /// Byte pattern for TGraalVar::SetScript (e.g., "48 89 ?? ?? ?? 57 48 ?? ?? ?? 48 8B DA")
+    pub setscript_pattern: Option<String>,
+
+    /// Pattern match index (which occurrence to use if multiple matches)
+    pub pattern_index: Option<usize>,
 }
 
 impl ClientOffsets {
