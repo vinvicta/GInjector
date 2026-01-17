@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "gs2-compiler",
     "frida-bridge",
+    "gbf-rs",
 ]
 
 [workspace.package]
@@ -55,10 +56,10 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 gs2-compiler = { path = "gs2-compiler" }
 frida-bridge = { path = "frida-bridge" }
+gbf-core = { path = "gbf-rs/gbf_core", package = "gbf_core" }
 rfd = "0.14"
 base64 = "0.22"
 regex = "1.11"
-tempfile = "3.13"
 
 [[bin]]
 name = "ginjector"

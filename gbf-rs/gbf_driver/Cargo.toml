@@ -1,0 +1,11 @@
+[package]
+name = "gbf_driver"
+version = "0.1.17"
+edition = "2024"
+
+[dependencies]
+log = "0.4.25"
+log4rs = "1.3.0"
+gbf_core = { path = "../gbf_core" }
+clap = { version = "4.5.30", features = ["derive"] }
+rayon = "1.10.0"
