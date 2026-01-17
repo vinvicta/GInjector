@@ -709,15 +709,22 @@ impl GInjectorApp {
     }
 
     fn compile_script(&mut self) {
-        let tab = match self.current_tab() {
-            Some(tab) => tab,
+        let tab_name = self.current_tab().map(|t| t.name.clone());
+        let tab_content = self.current_tab().map(|t| t.content.clone());
+
+        let tab_name = match tab_name {
+            Some(name) => name,
+            None => return,
+        };
+        let tab_content = match tab_content {
+            Some(content) => content,
             None => return,
         };
 
-        self.add_log(LogEntry::info(format!("Compiling: {}", tab.name)));
+        self.add_log(LogEntry::info(format!("Compiling: {}", tab_name)));
 
         // Use the gs2-compiler to compile the source code
-        match gs2_compiler::compile(&tab.content) {
+        match gs2_compiler::compile(&tab_content) {
             Ok(bytecode) => {
                 self.compiled_bytecode = Some(bytecode.clone());
                 self.add_log(LogEntry::success(format!("Compilation successful: {} bytes", bytecode.len())));
