@@ -7,6 +7,7 @@
 
 use regex::Regex;
 use std::io::Cursor;
+use gs2_decompiler::{ModuleBuilder, disassemble_bytecode as decompiler_disassemble};
 
 /// Errors that can occur during bytecode analysis
 #[derive(Debug, Clone)]
@@ -39,7 +40,11 @@ pub type AnalysisResult<T> = Result<T, AnalysisError>;
 
 /// Decompile GS2 bytecode to readable GS2 code
 ///
-/// Uses the gbf_core library to decompile bytecode
+/// Uses the gs2_decompiler library to decompile bytecode
+///
+/// # Note
+/// Decompilation is not yet implemented in the new library.
+/// This function will return an error until the decompiler modules are added.
 pub fn decompile_bytecode(bytecode: &[u8]) -> AnalysisResult<String> {
     if bytecode.is_empty() {
         return Err(AnalysisError::NoBytecode);
@@ -48,37 +53,31 @@ pub fn decompile_bytecode(bytecode: &[u8]) -> AnalysisResult<String> {
     let cursor = Cursor::new(bytecode);
 
     // Build the module from bytecode
-    let module = gbf_core::module::ModuleBuilder::new()
+    let module = ModuleBuilder::new()
         .name("input.gs2")
         .reader(Box::new(cursor))
         .build()
         .map_err(|e| AnalysisError::LoadFailed(e.to_string()))?;
 
-    // Configure emit context for pretty output
-    let emit_context = gbf_core::decompiler::ast::visitors::emit_context::EmitContextBuilder::default()
-        .verbosity(gbf_core::decompiler::ast::visitors::emit_context::EmitVerbosity::Pretty)
-        .build();
-
-    // Decompile the module
-    let decompiled = module
-        .decompile(emit_context)
-        .map_err(|e| AnalysisError::DecompileFailed(e.to_string()))?;
-
-    Ok(clean_decompiled_code(&decompiled))
+    // TODO: Implement decompiler modules
+    // For now, return an error since decompilation is not yet implemented
+    Err(AnalysisError::DecompileFailed(
+        "Decompilation is not yet implemented. Please use disassembly instead.".to_string()
+    ))
 }
 
 /// Disassemble GS2 bytecode to instruction listings
 ///
-/// Uses the gbf_core library to disassemble bytecode
+/// Uses the gs2_decompiler library to disassemble bytecode
 pub fn disassemble_bytecode(bytecode: &[u8]) -> AnalysisResult<String> {
     if bytecode.is_empty() {
         return Err(AnalysisError::NoBytecode);
     }
 
-    let cursor = Cursor::new(bytecode);
+    let mut cursor = Cursor::new(bytecode.to_vec());
 
-    // Use the disassemble function from gbf_core
-    let result = gbf_core::disassemble_bytecode(cursor)
+    // Use the disassemble function from gs2_decompiler
+    let result = decompiler_disassemble(&mut cursor)
         .map_err(|e| AnalysisError::DisassembleFailed(e.to_string()))?;
 
     Ok(result)
