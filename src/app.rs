@@ -718,25 +718,25 @@ impl GInjectorApp {
 
         // TODO: Actual compilation using gs2-compiler
         // For now, generate minimal valid GS2 bytecode
-        // GS2 bytecode format:
+        // GS2 bytecode uses BIG-ENDIAN (Graal encoding)
         // - Section 1 (Gs1Flags): type=1, length=4, flags=0
         // - Section 2 (Functions): type=2, length=0 (no functions)
         // - Section 3 (Strings): type=3, length=0 (no strings)
         // - Section 4 (Instructions): type=4, length=1, opcode=Ret (0x4B)
         let bytecode = vec![
             // Gs1Flags section
-            0x01, 0x00, 0x00, 0x00,  // section type = 1 (Gs1Flags)
-            0x04, 0x00, 0x00, 0x00,  // section length = 4
+            0x00, 0x00, 0x00, 0x01,  // section type = 1 (Gs1Flags) - BIG ENDIAN
+            0x00, 0x00, 0x00, 0x04,  // section length = 4 - BIG ENDIAN
             0x00, 0x00, 0x00, 0x00,  // flags = 0
             // Functions section (empty)
-            0x02, 0x00, 0x00, 0x00,  // section type = 2 (Functions)
-            0x00, 0x00, 0x00, 0x00,  // section length = 0
+            0x00, 0x00, 0x00, 0x02,  // section type = 2 (Functions) - BIG ENDIAN
+            0x00, 0x00, 0x00, 0x00,  // section length = 0 - BIG ENDIAN
             // Strings section (empty)
-            0x03, 0x00, 0x00, 0x00,  // section type = 3 (Strings)
-            0x00, 0x00, 0x00, 0x00,  // section length = 0
+            0x00, 0x00, 0x00, 0x03,  // section type = 3 (Strings) - BIG ENDIAN
+            0x00, 0x00, 0x00, 0x00,  // section length = 0 - BIG ENDIAN
             // Instructions section
-            0x04, 0x00, 0x00, 0x00,  // section type = 4 (Instructions)
-            0x01, 0x00, 0x00, 0x00,  // section length = 1
+            0x00, 0x00, 0x00, 0x04,  // section type = 4 (Instructions) - BIG ENDIAN
+            0x00, 0x00, 0x00, 0x01,  // section length = 1 - BIG ENDIAN
             0x4B,                     // Ret opcode
         ];
 
@@ -1146,10 +1146,8 @@ impl GInjectorApp {
     /// Get decompiled code for the current bytecode preview
     fn get_bytecode_preview(&self) -> String {
         if let Some(bytecode) = &self.compiled_bytecode {
-            match crate::bytecode_analyzer::decompile_bytecode(bytecode) {
-                Ok(code) => code,
-                Err(e) => format!("// Decompilation error: {}", e),
-            }
+            use frida_bridge::bytecode_to_hex;
+            bytecode_to_hex(bytecode)
         } else {
             "// No bytecode compiled yet".to_string()
         }
