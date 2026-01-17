@@ -1,1 +1,12 @@
+[workspace]
 resolver = "2"
+members = [
+    "gbf_core",
+    "gbf_driver",
+    "gbf_macros",
+    "gbf_stats",
+    "gbf_suite",
+]
+exclude = [
+    "gbf_web",
+]

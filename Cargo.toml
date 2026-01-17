@@ -3,11 +3,9 @@ resolver = "2"
 members = [
     "gs2-compiler",
     "frida-bridge",
-    "gbf-rs/gbf_core",
-    "gbf-rs/gbf_driver",
-    "gbf-rs/gbf_macros",
-    "gbf-rs/gbf_stats",
-    "gbf-rs/gbf_suite",
+]
+exclude = [
+    "gbf-rs",
 ]
 
 [workspace.package]
