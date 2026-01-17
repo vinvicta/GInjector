@@ -38,8 +38,11 @@ mod integration_tests {
         assert!(!bytecode.is_empty());
 
         // First section should be Gs1Flags (type 1)
-        // Using Graal encoding: 1 becomes (1 + 32) = 33
-        assert_eq!(bytecode[0], 33); // Section type 1 (Gs1Flags) Graal-encoded
+        // Section headers use raw big-endian u32
+        assert_eq!(bytecode[0], 0); // First byte of section type (big-endian u32)
+        assert_eq!(bytecode[1], 0);
+        assert_eq!(bytecode[2], 0);
+        assert_eq!(bytecode[3], 1); // Section type 1 (Gs1Flags)
     }
 
     #[test]

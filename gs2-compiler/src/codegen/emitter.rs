@@ -14,7 +14,7 @@ pub struct BytecodeEmitter {
     strings: Vec<String>,
     /// Function table (function locations)
     functions: Vec<(String, u32)>,
-    /// Current instruction address
+    /// Current instruction address (in bytecode, not raw bytes)
     current_address: u32,
     /// Break label stack for loops
     break_stack: Vec<usize>,
@@ -125,7 +125,7 @@ impl BytecodeEmitter {
         match expr {
             Expression::Literal { literal, .. } => {
                 if let Literal::String { value, .. } = &**literal {
-                    if !self.strings.contains(value) {
+                    if !self.strings.iter().any(|s| s == value) {
                         self.strings.push(value.clone());
                     }
                 }
@@ -171,26 +171,26 @@ impl BytecodeEmitter {
 
     /// Emit the GS1 flags section
     fn emit_gs1_flags(&mut self) -> Result<()> {
-        self.write_u32(1)?; // Section type: Gs1Flags
-        self.write_u32(4)?; // Section length: 4
-        self.write_u32(0)?; // Flags: 0
+        self.write_raw_u32(1)?; // Section type: Gs1Flags
+        self.write_raw_u32(4)?; // Section length: 4
+        self.write_raw_u32(0)?; // Flags: 0
         Ok(())
     }
 
     /// Emit the functions section
     fn emit_functions(&mut self) -> Result<()> {
-        self.write_u32(2)?; // Section type: Functions
+        self.write_raw_u32(2)?; // Section type: Functions
 
         let mut length = 0usize;
         for (name, _location) in &self.functions {
-            length += 4; // function location
+            length += 4; // function location (raw u32)
             length += name.len() + 1; // name + null terminator
         }
 
-        self.write_u32(length as u32)?;
+        self.write_raw_u32(length as u32)?;
 
         for (name, location) in self.functions.clone() {
-            self.write_u32(location)?;
+            self.write_raw_u32(location)?; // Raw u32 for function address
             self.write_string(&name)?;
         }
 
@@ -199,14 +199,14 @@ impl BytecodeEmitter {
 
     /// Emit the strings section
     fn emit_strings(&mut self) -> Result<()> {
-        self.write_u32(3)?; // Section type: Strings
+        self.write_raw_u32(3)?; // Section type: Strings
 
         let mut length = 0usize;
         for string in &self.strings {
             length += string.len() + 1;
         }
 
-        self.write_u32(length as u32)?;
+        self.write_raw_u32(length as u32)?;
 
         for string in self.strings.clone() {
             self.write_string(&string)?;
@@ -219,9 +219,9 @@ impl BytecodeEmitter {
     fn emit_instructions(&mut self, program: &Program) -> Result<()> {
         let instructions_start = self.output.len();
 
-        self.write_u32(4)?; // Section type: Instructions
+        self.write_raw_u32(4)?; // Section type: Instructions
         let length_offset = self.output.len();
-        self.write_u32(0)?; // Section length placeholder
+        self.write_raw_u32(0)?; // Section length placeholder
 
         // Emit instructions for each statement
         for statement in &program.statements {
@@ -252,8 +252,6 @@ impl BytecodeEmitter {
             }
             Statement::Expression { expr, .. } => {
                 let _ = self.emit_expression(expr)?;
-                // Pop the result if it's not used
-                // self.emit_opcode(Opcode::Pop)?;
             }
             Statement::Return { expr, .. } => {
                 if let Some(e) = expr {
@@ -276,13 +274,13 @@ impl BytecodeEmitter {
             Statement::Break { .. } => {
                 if let Some(target) = self.break_stack.last().copied() {
                     self.emit_opcode(Opcode::Jmp)?;
-                    self.write_u32(target as u32)?;
+                    self.write_graal_u32(target as u32)?;
                 }
             }
             Statement::Continue { .. } => {
                 if let Some(target) = self.continue_stack.last().copied() {
                     self.emit_opcode(Opcode::Jmp)?;
-                    self.write_u32(target as u32)?;
+                    self.write_graal_u32(target as u32)?;
                 }
             }
             Statement::With { obj, body, .. } => {
@@ -305,25 +303,25 @@ impl BytecodeEmitter {
         let _ = self.emit_expression(condition)?;
         self.emit_opcode(Opcode::Jne)?;
         let else_addr_offset = self.output.len();
-        self.write_u32(0)?;
+        self.write_graal_u32(0)?;
 
         let _ = self.emit_statement(true_block);
 
         if let Some(false_block) = false_block {
             self.emit_opcode(Opcode::Jmp)?;
             let end_addr_offset = self.output.len();
-            self.write_u32(0)?;
+            self.write_graal_u32(0)?;
 
             let else_addr = self.current_address as u32;
-            self.update_u32_at(else_addr_offset, else_addr)?;
+            self.update_graal_u32_at(else_addr_offset, else_addr)?;
 
             let _ = self.emit_statement(false_block);
 
             let end_addr = self.current_address as u32;
-            self.update_u32_at(end_addr_offset, end_addr)?;
+            self.update_graal_u32_at(end_addr_offset, end_addr)?;
         } else {
             let else_addr = self.current_address as u32;
-            self.update_u32_at(else_addr_offset, else_addr)?;
+            self.update_graal_u32_at(else_addr_offset, else_addr)?;
         }
 
         Ok(())
@@ -336,11 +334,10 @@ impl BytecodeEmitter {
         let _ = self.emit_expression(condition)?;
         self.emit_opcode(Opcode::Jne)?;
         let end_addr_offset = self.output.len();
-        self.write_u32(0)?;
+        self.write_graal_u32(0)?;
 
         // Set up break/continue targets
-        let loop_end = self.output.len(); // placeholder
-        self.break_stack.push(loop_end);
+        self.break_stack.push(self.output.len());
         self.continue_stack.push(loop_start);
 
         let _ = self.emit_statement(body);
@@ -350,10 +347,10 @@ impl BytecodeEmitter {
         self.continue_stack.pop();
 
         self.emit_opcode(Opcode::Jmp)?;
-        self.write_u32(loop_start as u32)?;
+        self.write_graal_u32(loop_start as u32)?;
 
         let end_addr = self.current_address as u32;
-        self.update_u32_at(end_addr_offset, end_addr)?;
+        self.update_graal_u32_at(end_addr_offset, end_addr)?;
 
         Ok(())
     }
@@ -372,7 +369,7 @@ impl BytecodeEmitter {
         }
 
         let loop_start = self.output.len();
-        let increment_addr = self.output.len(); // Will be updated
+        let increment_addr = self.output.len();
 
         // Emit condition
         if let Some(condition) = condition {
@@ -383,7 +380,7 @@ impl BytecodeEmitter {
         }
         self.emit_opcode(Opcode::Jne)?;
         let end_addr_offset = self.output.len();
-        self.write_u32(0)?;
+        self.write_graal_u32(0)?;
 
         // Set up break/continue targets
         self.break_stack.push(self.output.len());
@@ -399,11 +396,11 @@ impl BytecodeEmitter {
 
         // Jump back to condition
         self.emit_opcode(Opcode::Jmp)?;
-        self.write_u32(loop_start as u32)?;
+        self.write_graal_u32(loop_start as u32)?;
 
         // End of loop
         let end_addr = self.current_address as u32;
-        self.update_u32_at(end_addr_offset, end_addr)?;
+        self.update_graal_u32_at(end_addr_offset, end_addr)?;
 
         self.break_stack.pop();
         self.continue_stack.pop();
@@ -419,7 +416,7 @@ impl BytecodeEmitter {
         // ForEach opcode expects the array on the stack
         self.emit_opcode(Opcode::ForEach)?;
         let end_addr_offset = self.output.len();
-        self.write_u32(0)?;
+        self.write_graal_u32(0)?;
 
         // The loop variable is available as a special variable
         // For now, we'll emit the body assuming the item is accessible
@@ -427,10 +424,10 @@ impl BytecodeEmitter {
 
         // Jump back to ForEach
         self.emit_opcode(Opcode::Jmp)?;
-        self.write_u32((end_addr_offset - 5) as u32)?;
+        self.write_graal_u32((end_addr_offset - 5) as u32)?;
 
         let end_addr = self.current_address as u32;
-        self.update_u32_at(end_addr_offset, end_addr)?;
+        self.update_graal_u32_at(end_addr_offset, end_addr)?;
 
         Ok(())
     }
@@ -497,8 +494,6 @@ impl BytecodeEmitter {
                 } else {
                     // Handle floating point
                     self.emit_opcode(Opcode::PushNumber)?;
-                    // For floats, we'd need to handle them differently
-                    // For now, parse as f32 and write as bytes
                     if let Ok(f) = value.parse::<f32>() {
                         self.write_f32(f)?;
                     }
@@ -589,17 +584,6 @@ impl BytecodeEmitter {
 
     /// Emit an assignment operation
     fn emit_assignment(&mut self, target: &Expression, op: crate::ast::expression::BinaryOp, value: &Expression) -> Result<()> {
-        // For simple assignment, we need to:
-        // 1. Emit the target (to get the object/reference)
-        // 2. Emit the value
-        // 3. Emit Assign opcode
-
-        // For compound assignment (+=, -=, etc.), we need to:
-        // 1. Emit the target (to get the current value)
-        // 2. Emit the value
-        // 3. Emit the operation
-        // 4. Store back
-
         let is_compound = !matches!(op, crate::ast::expression::BinaryOp::Assign);
 
         if is_compound {
@@ -715,21 +699,21 @@ impl BytecodeEmitter {
         let _ = self.emit_expression(condition)?;
         self.emit_opcode(Opcode::Jne)?;
         let false_addr_offset = self.output.len();
-        self.write_u32(0)?;
+        self.write_graal_u32(0)?;
 
         let _ = self.emit_expression(true_expr)?;
 
         self.emit_opcode(Opcode::Jmp)?;
         let end_addr_offset = self.output.len();
-        self.write_u32(0)?;
+        self.write_graal_u32(0)?;
 
         let false_addr = self.current_address as u32;
-        self.update_u32_at(false_addr_offset, false_addr)?;
+        self.update_graal_u32_at(false_addr_offset, false_addr)?;
 
         let _ = self.emit_expression(false_expr)?;
 
         let end_addr = self.current_address as u32;
-        self.update_u32_at(end_addr_offset, end_addr)?;
+        self.update_graal_u32_at(end_addr_offset, end_addr)?;
 
         Ok(())
     }
@@ -790,8 +774,17 @@ impl BytecodeEmitter {
         Ok(())
     }
 
-    /// Write a u32 (Graal encoding)
-    fn write_u32(&mut self, value: u32) -> Result<()> {
+    /// Write a raw u32 (big-endian, NOT Graal encoded)
+    /// Used for section headers
+    fn write_raw_u32(&mut self, value: u32) -> Result<()> {
+        self.output.extend_from_slice(&value.to_be_bytes());
+        self.current_address += 4;
+        Ok(())
+    }
+
+    /// Write a Graal-encoded u32
+    /// Used for jump addresses and certain operands
+    fn write_graal_u32(&mut self, value: u32) -> Result<()> {
         let mut encoded = Vec::new();
         GraalWriter::encode_u32(value, &mut encoded);
         self.output.extend_from_slice(&encoded);
@@ -813,8 +806,8 @@ impl BytecodeEmitter {
         Ok(())
     }
 
-    /// Update a u32 at a specific offset
-    fn update_u32_at(&mut self, offset: usize, value: u32) -> Result<()> {
+    /// Update a Graal-encoded u32 at a specific offset
+    fn update_graal_u32_at(&mut self, offset: usize, value: u32) -> Result<()> {
         let mut encoded = Vec::new();
         GraalWriter::encode_u32(value, &mut encoded);
         self.output[offset..offset + encoded.len()].copy_from_slice(&encoded);
@@ -834,7 +827,7 @@ impl BytecodeEmitter {
     }
 }
 
-/// Minimal Graal writer for encoding
+/// Graal writer for encoding
 struct GraalWriter;
 
 impl GraalWriter {
