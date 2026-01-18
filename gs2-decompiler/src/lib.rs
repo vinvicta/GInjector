@@ -9,6 +9,9 @@ pub mod basic_block;
 /// Control flow graph visualization
 pub mod cfg_dot;
 
+/// Bytecode decompiler
+pub mod decompiler;
+
 /// Function representation and management
 pub mod function;
 
@@ -67,5 +70,6 @@ pub fn disassemble_bytecode(cursor: &mut Cursor<Vec<u8>>) -> Result<String, byte
 
 /// Re-exports for commonly used types
 pub use basic_block::{BasicBlock, BasicBlockId, BasicBlockType};
+pub use decompiler::Decompiler;
 pub use function::{Function, FunctionId};
 pub use module::{Module, ModuleBuilder};

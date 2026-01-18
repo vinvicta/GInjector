@@ -6,7 +6,7 @@ use crate::ast::expression::{BinaryOp, Expression, UnaryOp};
 use crate::ast::identifier::Identifier;
 use crate::ast::literal::Literal;
 use crate::ast::program::Program;
-use crate::ast::statement::Statement;
+use crate::ast::statement::{EnumMember, Statement};
 use crate::error::{CompileError, SourceLocation};
 
 pub mod lexer;
@@ -47,6 +47,11 @@ impl Parser {
     /// Peek at the current token
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.pos).map(|(t, _)| t)
+    }
+
+    /// Peek at the next token (token after current)
+    fn peek_next(&self) -> Option<&Token> {
+        self.tokens.get(self.pos + 1).map(|(t, _)| t)
     }
 
     /// Peek at the current token with location
@@ -103,6 +108,8 @@ impl Parser {
             Some(Token::KeywordReturn) => self.parse_return_statement(),
             Some(Token::KeywordBreak) => self.parse_break_statement(),
             Some(Token::KeywordContinue) => self.parse_continue_statement(),
+            Some(Token::KeywordConst) => self.parse_const_declaration(),
+            Some(Token::KeywordEnum) => self.parse_enum_declaration(),
             Some(Token::LBrace) => self.parse_block(),
             _ => self.parse_expression_statement(),
         }
@@ -157,16 +164,265 @@ impl Parser {
         }))
     }
 
+    /// Parse a const declaration: `const NAME = VALUE;`
+    fn parse_const_declaration(&mut self) -> ParseResult<Box<Statement>> {
+        self.expect(Token::KeywordConst)?;
+
+        let name = match self.consume() {
+            Some(Token::Identifier(s)) => Identifier::with_name(s),
+            _ => return Err(CompileError::Parse {
+                message: "expected const name".to_string(),
+                location: self.peek_with_loc().map(|(_, loc)| *loc).unwrap_or_default(),
+            }),
+        };
+
+        self.expect(Token::Equals)?;
+
+        // Parse the value - can be a literal or identifier (reference to another const)
+        let value = self.parse_const_value()?;
+
+        self.expect(Token::Semicolon)?;
+
+        Ok(Box::new(Statement::Const {
+            name,
+            value,
+            location: SourceLocation::new(),
+        }))
+    }
+
+    /// Parse a const value - can be a literal, unary negation of a literal, or identifier
+    fn parse_const_value(&mut self) -> ParseResult<Expression> {
+        // Check for unary minus (negative numbers)
+        if self.check(Token::Minus) {
+            self.consume();
+            let expr = self.parse_primary()?;
+            // Negate the literal value
+            match expr {
+                Expression::Literal { literal, location } => {
+                    match *literal {
+                        Literal::Number { value, .. } => {
+                            // Negate the number string
+                            let negated = if value.starts_with('-') {
+                                value[1..].to_string()
+                            } else {
+                                format!("-{}", value)
+                            };
+                            return Ok(Expression::Literal {
+                                literal: Box::new(Literal::Number { value: negated, location }),
+                                location,
+                            });
+                        }
+                        _ => return Err(CompileError::Parse {
+                            message: "const value must be a number, string, or identifier".to_string(),
+                            location,
+                        }),
+                    }
+                }
+                _ => return Err(CompileError::Parse {
+                    message: "can only negate literal values in const declarations".to_string(),
+                    location: expr.location().clone(),
+                }),
+            }
+        }
+
+        // Parse as a regular expression (literal or identifier)
+        let expr = self.parse_primary()?;
+        // Validate that it's a valid const value (literal or identifier)
+        match &expr {
+            Expression::Literal { .. } | Expression::Identifier { .. } => Ok(expr),
+            _ => Err(CompileError::Parse {
+                message: "const value must be a literal or identifier".to_string(),
+                location: expr.location().clone(),
+            }),
+        }
+    }
+
+    /// Parse an enum declaration: `enum Name { MEMBER1, MEMBER2 = value, ... }` or `enum { MEMBER1, ... }`
+    fn parse_enum_declaration(&mut self) -> ParseResult<Box<Statement>> {
+        self.expect(Token::KeywordEnum)?;
+
+        // Check if there's a name (named enum) or just { (anonymous enum)
+        let name = match self.peek() {
+            Some(Token::Identifier(s)) => {
+                let name = Identifier::with_name(s.clone());
+                self.consume(); // consume the identifier
+                Some(name)
+            }
+            Some(Token::LBrace) => None,
+            _ => return Err(CompileError::Parse {
+                message: "expected enum name or {{".to_string(),
+                location: self.peek_with_loc().map(|(_, loc)| *loc).unwrap_or_default(),
+            }),
+        };
+
+        self.expect(Token::LBrace)?;
+
+        let mut members = Vec::new();
+        let mut next_auto_value = 0i32;
+
+        // Parse enum members
+        loop {
+            // Check for end of enum
+            if self.check(Token::RBrace) {
+                self.consume();
+                break;
+            }
+
+            // Parse member name
+            let member_name = match self.consume() {
+                Some(Token::Identifier(s)) => Identifier::with_name(s),
+                _ => return Err(CompileError::Parse {
+                    message: "expected enum member name".to_string(),
+                    location: self.peek_with_loc().map(|(_, loc)| *loc).unwrap_or_default(),
+                }),
+            };
+
+            // Check for explicit value: `MEMBER = value`
+            let member_value = if self.check(Token::Equals) {
+                self.consume();
+                // Check for negative numbers
+                if self.check(Token::Minus) {
+                    self.consume();
+                    match self.consume() {
+                        Some(Token::Number(n)) => {
+                            let negated = if n.starts_with('-') {
+                                n[1..].to_string()
+                            } else {
+                                format!("-{}", n)
+                            };
+                            // Parse as integer and update auto-increment
+                            if let Ok(val) = negated.parse::<i32>() {
+                                next_auto_value = val + 1;
+                                Some(Expression::Literal {
+                                    literal: Box::new(Literal::Number { value: negated, location: SourceLocation::new() }),
+                                    location: SourceLocation::new(),
+                                })
+                            } else {
+                                return Err(CompileError::Parse {
+                                    message: "enum value must be an integer".to_string(),
+                                    location: SourceLocation::new(),
+                                });
+                            }
+                        }
+                        _ => return Err(CompileError::Parse {
+                            message: "expected number after minus".to_string(),
+                            location: SourceLocation::new(),
+                        }),
+                    }
+                } else {
+                    match self.consume() {
+                        Some(Token::Number(n)) => {
+                            // Parse as integer and update auto-increment
+                            if let Ok(val) = n.parse::<i32>() {
+                                next_auto_value = val + 1;
+                                Some(Expression::Literal {
+                                    literal: Box::new(Literal::Number { value: n, location: SourceLocation::new() }),
+                                    location: SourceLocation::new(),
+                                })
+                            } else {
+                                return Err(CompileError::Parse {
+                                    message: "enum value must be an integer".to_string(),
+                                    location: SourceLocation::new(),
+                                });
+                            }
+                        }
+                        _ => return Err(CompileError::Parse {
+                            message: "expected integer value for enum member".to_string(),
+                            location: SourceLocation::new(),
+                        }),
+                    }
+                }
+            } else {
+                // Auto-increment value
+                let value = next_auto_value;
+                next_auto_value += 1;
+                Some(Expression::Literal {
+                    literal: Box::new(Literal::Number { value: value.to_string(), location: SourceLocation::new() }),
+                    location: SourceLocation::new(),
+                })
+            };
+
+            members.push(EnumMember {
+                name: member_name,
+                value: member_value,
+            });
+
+            // Check for comma
+            if !self.check(Token::Comma) {
+                // No comma - might be end of enum
+                if !self.check(Token::RBrace) {
+                    return Err(CompileError::Parse {
+                        message: "expected comma or } after enum member".to_string(),
+                        location: SourceLocation::new(),
+                    });
+                }
+            } else {
+                self.consume(); // consume comma
+            }
+        }
+
+        // Consume trailing semicolon if present
+        if self.check(Token::Semicolon) {
+            self.consume();
+        }
+
+        Ok(Box::new(Statement::Enum {
+            name,
+            members,
+            location: SourceLocation::new(),
+        }))
+    }
+
     /// Parse an if statement
     fn parse_if_statement(&mut self) -> ParseResult<Box<Statement>> {
         self.expect(Token::KeywordIf)?;
         let condition = self.parse_expression()?;
 
-        let true_block = self.parse_block()?;
+        // Parse body - can be a block or single statement
+        let true_block = if self.check(Token::LBrace) {
+            self.parse_block()?
+        } else {
+            self.parse_statement()?
+        };
 
         let false_block = if self.check(Token::KeywordElse) {
             self.consume();
-            Some(self.parse_block()?)
+            // Check if next is "if" for "else if", or if we already have "elseif"
+            if self.check(Token::KeywordIf) {
+                // "else if" pattern
+                Some(self.parse_if_statement()?)
+            } else {
+                // Regular else block
+                if self.check(Token::LBrace) {
+                    Some(self.parse_block()?)
+                } else {
+                    Some(self.parse_statement()?)
+                }
+            }
+        } else if self.check(Token::KeywordElseIf) {
+            // "elseif" is a single keyword meaning "else if"
+            // We need to parse: elseif (condition) statement
+            // And then check for more elseif/else clauses after the statement
+            self.consume(); // consume "elseif"
+            let elseif_condition = self.parse_expression()?;
+            let elseif_block = if self.check(Token::LBrace) {
+                self.parse_block()?
+            } else {
+                self.parse_statement()?
+            };
+            // Create the elseif if statement and check for more elseif/else
+            // by recursively calling parse_if_statement for the else clause
+            Some(Box::new(Statement::If {
+                condition: elseif_condition,
+                true_block: elseif_block,
+                // Recursively handle any additional elseif/else
+                false_block: if self.check(Token::KeywordElse) || self.check(Token::KeywordElseIf) {
+                    Some(self.parse_else_chain()?)
+                } else {
+                    None
+                },
+                location: SourceLocation::new(),
+            }))
         } else {
             None
         };
@@ -179,11 +435,66 @@ impl Parser {
         }))
     }
 
+    /// Parse an else clause chain after an if/elseif block
+    /// Handles: "else { block }", "else statement", "elseif (condition) statement"
+    fn parse_else_chain(&mut self) -> ParseResult<Box<Statement>> {
+        if self.check(Token::KeywordElse) {
+            self.consume(); // consume "else"
+            if self.check(Token::KeywordIf) {
+                // "else if" - recursively parse the if statement
+                self.parse_if_statement()
+            } else {
+                // Regular else block
+                let block = if self.check(Token::LBrace) {
+                    self.parse_block()?
+                } else {
+                    self.parse_statement()?
+                };
+                Ok(Box::new(Statement::Block {
+                    statements: vec![*block],
+                    location: SourceLocation::new(),
+                }))
+            }
+        } else if self.check(Token::KeywordElseIf) {
+            // "elseif (condition) statement" - equivalent to "else if (condition) statement"
+            self.consume(); // consume "elseif"
+            let condition = self.parse_expression()?;
+            let true_block = if self.check(Token::LBrace) {
+                self.parse_block()?
+            } else {
+                self.parse_statement()?
+            };
+            // Check for more elseif/else after this elseif block
+            let false_block = if self.check(Token::KeywordElse) || self.check(Token::KeywordElseIf) {
+                Some(self.parse_else_chain()?)
+            } else {
+                None
+            };
+            Ok(Box::new(Statement::If {
+                condition,
+                true_block,
+                false_block,
+                location: SourceLocation::new(),
+            }))
+        } else {
+            Err(CompileError::Parse {
+                message: "expected 'else' or 'elseif'".to_string(),
+                location: self.peek_with_loc().map(|(_, loc)| *loc).unwrap_or_default(),
+            })
+        }
+    }
+
     /// Parse a while statement
     fn parse_while_statement(&mut self) -> ParseResult<Box<Statement>> {
         self.expect(Token::KeywordWhile)?;
         let condition = self.parse_expression()?;
-        let body = self.parse_block()?;
+
+        // Parse body - can be a block or single statement
+        let body = if self.check(Token::LBrace) {
+            self.parse_block()?
+        } else {
+            self.parse_statement()?
+        };
 
         Ok(Box::new(Statement::While {
             condition,
@@ -193,20 +504,71 @@ impl Parser {
     }
 
     /// Parse a for statement
+    ///
+    /// Handles both regular C-style for loops: `for (init; condition; increment) { body }`
+    /// and for-each loops: `for (item: array) { body }` or `for (item: array) statement`
     fn parse_for_statement(&mut self) -> ParseResult<Box<Statement>> {
         self.expect(Token::KeywordFor)?;
         self.expect(Token::LParen)?;
 
-        let init = if self.check(Token::Semicolon) {
+        // Parse the first expression - could be:
+        // - For regular for: init expression (optional)
+        // - For for-each: item variable name
+        let first_expr = if self.check(Token::Semicolon) {
+            // Empty init, definitely not a for-each
             self.consume();
             None
         } else {
-            let init_expr = self.parse_expression()?;
-            self.expect(Token::Semicolon)?;
-            Some(Box::new(Statement::Expression {
-                expr: init_expr,
+            Some(self.parse_expression()?)
+        };
+
+        // Check if this is a for-each loop (colon after first expression)
+        if first_expr.is_some() && self.check(Token::Colon) {
+            // This is a for-each loop: `for (item: array) statement`
+            self.consume(); // consume colon
+
+            // Parse the array expression
+            let array_expr = self.parse_expression()?;
+            self.expect(Token::RParen)?;
+
+            // Extract the item identifier from the first expression
+            // Supports both: `for (x: array)` and `for (temp.x: array)`
+            let item = match first_expr.unwrap() {
+                Expression::Identifier { identifier, .. } => *identifier,
+                Expression::MemberAccess { property, .. } => property,
+                _ => {
+                    return Err(CompileError::Parse {
+                        message: "for-each loop variable must be an identifier".to_string(),
+                        location: SourceLocation::new(),
+                    });
+                }
+            };
+
+            // Parse body - can be a block or single statement
+            let body = if self.check(Token::LBrace) {
+                self.parse_block()?
+            } else {
+                self.parse_statement()?
+            };
+
+            return Ok(Box::new(Statement::ForEach {
+                item,
+                array: array_expr,
+                body,
                 location: SourceLocation::new(),
-            }))
+            }));
+        }
+
+        // Regular for loop: `for (init; condition; increment) statement`
+        let init = match first_expr {
+            Some(expr) => {
+                self.expect(Token::Semicolon)?;
+                Some(Box::new(Statement::Expression {
+                    expr,
+                    location: SourceLocation::new(),
+                }))
+            }
+            None => None,
         };
 
         let condition = if self.check(Token::Semicolon) {
@@ -229,7 +591,12 @@ impl Parser {
 
         self.expect(Token::RParen)?;
 
-        let body = self.parse_block()?;
+        // Parse body - can be a block or single statement
+        let body = if self.check(Token::LBrace) {
+            self.parse_block()?
+        } else {
+            self.parse_statement()?
+        };
 
         Ok(Box::new(Statement::For {
             init,
@@ -544,6 +911,12 @@ impl Parser {
     fn parse_equality(&mut self) -> ParseResult<Expression> {
         let mut left = self.parse_comparison()?;
 
+        // Check for 'in' operator first (has different syntax)
+        if let Some(Token::KeywordIn) = self.peek() {
+            self.consume();
+            return self.parse_in_expression(left);
+        }
+
         while let Some(op) = match self.peek() {
             Some(Token::EqualsEquals) => Some(BinaryOp::Equal),
             Some(Token::BangEquals) => Some(BinaryOp::NotEqual),
@@ -560,6 +933,47 @@ impl Parser {
         }
 
         Ok(left)
+    }
+
+    /// Parse an 'in' expression
+    /// Supports:
+    /// - value in array
+    /// - value in |lower, upper|
+    /// - value in <lower, upper>
+    fn parse_in_expression(&mut self, value: Expression) -> ParseResult<Expression> {
+        // Check for range syntax: |lower, upper| or <lower, upper>
+        let (container, upper_bound) = match self.peek() {
+            Some(Token::Pipe) => {
+                // |lower, upper| syntax
+                self.consume(); // consume |
+                let lower = self.parse_shift()?; // Use shift to avoid consuming |
+                self.expect(Token::Comma)?;
+                let upper = self.parse_shift()?;
+                self.expect(Token::Pipe)?;
+                (lower, Some(upper))
+            }
+            Some(Token::Less) => {
+                // <lower, upper> syntax
+                self.consume(); // consume <
+                let lower = self.parse_shift()?; // Use shift to avoid consuming >
+                self.expect(Token::Comma)?;
+                let upper = self.parse_shift()?;
+                self.expect(Token::Greater)?;
+                (lower, Some(upper))
+            }
+            _ => {
+                // Simple array/object check: value in array
+                let container = self.parse_shift()?; // Use shift to maintain precedence
+                (container, None)
+            }
+        };
+
+        Ok(Expression::In {
+            value: Box::new(value),
+            container: Box::new(container),
+            upper_bound: upper_bound.map(Box::new),
+            location: SourceLocation::new(),
+        })
     }
 
     /// Parse comparison expressions
@@ -691,7 +1105,7 @@ impl Parser {
         self.parse_postfix()
     }
 
-    /// Parse postfix expressions (function calls, member access, array access)
+    /// Parse postfix expressions (function calls, member access, array access, inc/dec)
     fn parse_postfix(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_primary()?;
 
@@ -713,10 +1127,33 @@ impl Parser {
 
                     self.expect(Token::RParen)?;
 
-                    expr = Expression::FunctionCall {
-                        target: Box::new(expr),
-                        args,
-                        location: SourceLocation::new(),
+                    // Check for cast_int(expr) and cast_float(expr)
+                    if let Expression::Identifier { identifier, .. } = &expr {
+                        if identifier.name == "cast_int" && args.len() == 1 {
+                            expr = Expression::Cast {
+                                expr: Box::new(args.into_iter().next().unwrap()),
+                                target_type: crate::ast::expression::CastType::Integer,
+                                location: SourceLocation::new(),
+                            };
+                        } else if identifier.name == "cast_float" && args.len() == 1 {
+                            expr = Expression::Cast {
+                                expr: Box::new(args.into_iter().next().unwrap()),
+                                target_type: crate::ast::expression::CastType::Float,
+                                location: SourceLocation::new(),
+                            };
+                        } else {
+                            expr = Expression::FunctionCall {
+                                target: Box::new(expr),
+                                args,
+                                location: SourceLocation::new(),
+                            };
+                        }
+                    } else {
+                        expr = Expression::FunctionCall {
+                            target: Box::new(expr),
+                            args,
+                            location: SourceLocation::new(),
+                        };
                     };
                 }
                 Some(Token::LBracket) => {
@@ -744,6 +1181,57 @@ impl Parser {
                             location: self.peek_with_loc().map(|(_, loc)| *loc).unwrap_or_default(),
                         });
                     }
+                }
+                Some(Token::Colon) => {
+                    // Check for scope resolution operator :: (enum member access)
+                    // Only treat as :: if the next token is also Colon
+                    if self.peek_next() == Some(&Token::Colon) {
+                        self.consume(); // consume first colon
+                        self.consume(); // consume second colon
+
+                        if let Some(Token::Identifier(member)) = self.consume() {
+                            // Create a combined identifier like "EnumName::MemberName"
+                            // For enum member access, we create a single identifier with the scope resolution
+                            let enum_name = if let Expression::Identifier { identifier, .. } = &expr {
+                                &identifier.name
+                            } else {
+                                return Err(CompileError::Parse {
+                                    message: "expected enum name before ::".to_string(),
+                                    location: SourceLocation::new(),
+                                });
+                            };
+                            let scoped_name = format!("{}::{}", enum_name, member);
+                            expr = Expression::Identifier {
+                                identifier: Box::new(Identifier::with_name(scoped_name)),
+                                location: SourceLocation::new(),
+                            };
+                        } else {
+                            return Err(CompileError::Parse {
+                                message: "expected enum member name after ::".to_string(),
+                                location: SourceLocation::new(),
+                            });
+                        }
+                    } else {
+                        // Single colon - this is not part of ::, so it's for other syntax (ternary, for-each)
+                        // Don't consume it, let it be handled by the parent parser
+                        break;
+                    }
+                }
+                Some(Token::PlusPlus) => {
+                    self.consume();
+                    expr = Expression::UnaryOp {
+                        op: crate::ast::expression::UnaryOp::PostInc,
+                        expr: Box::new(expr),
+                        location: SourceLocation::new(),
+                    };
+                }
+                Some(Token::MinusMinus) => {
+                    self.consume();
+                    expr = Expression::UnaryOp {
+                        op: crate::ast::expression::UnaryOp::PostDec,
+                        expr: Box::new(expr),
+                        location: SourceLocation::new(),
+                    };
                 }
                 _ => break,
             }

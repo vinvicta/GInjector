@@ -9,6 +9,7 @@ use std::{
 use crate::{
     basic_block::{BasicBlockId, BasicBlockType},
     bytecode_loader::{self, BytecodeLoaderError},
+    decompiler::Decompiler,
     function::{Function, FunctionId},
     instruction::Instruction,
     utils::Gs2BytecodeAddress,
@@ -259,9 +260,22 @@ impl Module {
     /// - A Result containing the decompiled module if successful, or an error if not.
     ///
     /// # Note
-    /// This is currently a stub that will be implemented when the decompiler modules are added.
+    /// This decompiles all functions in the module and returns the GS2 source code.
     pub fn decompile(&self, _ctx: ()) -> Result<String, ModuleError> {
-        Err(ModuleError::DecompilerNotImplemented)
+        let mut decompiler = Decompiler::new();
+
+        // Collect string table and function table from the bytecode
+        // Note: These would need to be extracted from the loaded bytecode
+        // For now, we'll use empty tables
+
+        let mut result = String::new();
+
+        // Decompile each function
+        for function in &self.functions {
+            result.push_str(&decompiler.decompile_function(function));
+        }
+
+        Ok(result)
     }
 
     /// Check if the function exists in the module

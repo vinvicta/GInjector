@@ -140,6 +140,9 @@ pub enum UnaryOp {
     LogicalNot,
     // Bitwise
     BitwiseInvert,
+    // Postfix increment/decrement
+    PostInc,
+    PostDec,
 }
 
 /// An expression in GS2 source code
@@ -212,6 +215,28 @@ pub enum Expression {
         false_expr: Box<Expression>,
         location: SourceLocation,
     },
+
+    /// An `in` expression: `value in array` or `value in |min, max|`
+    In {
+        value: Box<Expression>,
+        container: Box<Expression>,
+        upper_bound: Option<Box<Expression>>,
+        location: SourceLocation,
+    },
+
+    /// A cast expression: `cast_int(expr)` or `cast_float(expr)`
+    Cast {
+        expr: Box<Expression>,
+        target_type: CastType,
+        location: SourceLocation,
+    },
+}
+
+/// Cast target type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastType {
+    Integer,
+    Float,
 }
 
 impl Expression {
@@ -227,7 +252,9 @@ impl Expression {
             | Expression::ArrayAccess { location, .. }
             | Expression::ArrayLiteral { location, .. }
             | Expression::ObjectLiteral { location, .. }
-            | Expression::Ternary { location, .. } => location,
+            | Expression::Ternary { location, .. }
+            | Expression::In { location, .. }
+            | Expression::Cast { location, .. } => location,
         }
     }
 

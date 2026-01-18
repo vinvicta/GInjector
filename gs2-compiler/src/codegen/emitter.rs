@@ -219,6 +219,9 @@ pub struct BytecodeEmitter {
     function_table: Vec<FunctionEntry>,
     function_set: HashSet<String>,
 
+    // Constants table (const declarations)
+    constants_table: HashMap<String, Expression>,
+
     // Label management
     label_counter: LabelId,
     label_locs: HashMap<LabelId, Vec<usize>>,
@@ -257,6 +260,7 @@ impl BytecodeEmitter {
             string_table_map: HashMap::new(),
             function_table: Vec::new(),
             function_set: HashSet::new(),
+            constants_table: HashMap::new(),
             label_counter: 1,
             label_locs: HashMap::new(),
             label_addr: HashMap::new(),
@@ -281,13 +285,81 @@ impl BytecodeEmitter {
     // ========================================================================
 
     pub fn emit_program(&mut self, program: &Program) -> Result<Vec<u8>> {
-        // Emit all statements
+        // First pass: collect all const declarations
+        self.collect_constants(program)?;
+
+        // Second pass: emit all statements (consts are skipped, just stored in table)
         for statement in &program.statements {
             self.emit_statement(statement)?;
         }
 
         // Get the final bytecode
         Ok(self.finalize_bytecode())
+    }
+
+    // Collect all const declarations into the constants table
+    fn collect_constants(&mut self, program: &Program) -> Result<()> {
+        for statement in &program.statements {
+            if let Statement::Const { name, value, .. } = statement {
+                // Check for redefinition
+                if self.constants_table.contains_key(&name.name) {
+                    return Err(crate::error::CompileError::ConstRedefinition {
+                        name: name.name.clone(),
+                        location: statement.location().clone(),
+                    });
+                }
+                // Resolve the value to get the actual literal (handling const references)
+                let resolved_value = self.resolve_const_value(value)?;
+                self.constants_table.insert(name.name.clone(), resolved_value);
+            } else if let Statement::Enum { name, members, .. } = statement {
+                // Process enum members as constants
+                let prefix = name.as_ref().map(|n| n.name.clone());
+                for member in members {
+                    let const_name = if let Some(ref enum_name) = prefix {
+                        format!("{}::{}", enum_name, member.name.name)
+                    } else {
+                        member.name.name.clone()
+                    };
+
+                    // Check for redefinition
+                    if self.constants_table.contains_key(&const_name) {
+                        return Err(crate::error::CompileError::ConstRedefinition {
+                            name: const_name.clone(),
+                            location: statement.location().clone(),
+                        });
+                    }
+
+                    // Add the member value to the constants table
+                    if let Some(ref value) = member.value {
+                        let resolved_value = self.resolve_const_value(value)?;
+                        self.constants_table.insert(const_name, resolved_value);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Resolve a const value, following const references until we get a literal
+    fn resolve_const_value(&self, expr: &Expression) -> Result<Expression> {
+        match expr {
+            Expression::Literal { .. } => Ok(expr.clone()),
+            Expression::Identifier { identifier, .. } => {
+                // Look up the const in the table
+                if let Some(value) = self.constants_table.get(&identifier.name) {
+                    // Recursively resolve (in case const refers to another const)
+                    self.resolve_const_value(value)
+                } else {
+                    Err(crate::error::CompileError::UndefinedConst {
+                        name: identifier.name.clone(),
+                        location: expr.location().clone(),
+                    })
+                }
+            }
+            _ => Err(crate::error::CompileError::InvalidConstValue {
+                location: expr.location().clone(),
+            }),
+        }
     }
 
     // ========================================================================
@@ -497,6 +569,12 @@ impl BytecodeEmitter {
             }
             Statement::Switch { .. } => {
                 // TODO: Implement switch statements
+            }
+            Statement::Const { .. } => {
+                // Const declarations are handled in collect_constants, no bytecode to emit
+            }
+            Statement::Enum { .. } => {
+                // Enum declarations are handled in collect_constants, no bytecode to emit
             }
         }
         Ok(())
@@ -890,6 +968,17 @@ impl BytecodeEmitter {
             } => {
                 self.emit_ternary(condition, true_expr, false_expr)?;
             }
+            Expression::In {
+                value,
+                container,
+                upper_bound,
+                ..
+            } => {
+                self.emit_in_expr(value, container, upper_bound.as_deref())?;
+            }
+            Expression::Cast { expr, target_type, .. } => {
+                self.emit_cast_expr(expr, *target_type)?;
+            }
         }
         Ok(())
     }
@@ -927,6 +1016,12 @@ impl BytecodeEmitter {
     }
 
     fn emit_identifier(&mut self, ident: &Identifier) -> Result<()> {
+        // Check if this is a const - if so, substitute the value
+        if let Some(const_value) = self.constants_table.get(&ident.name).cloned() {
+            // Emit the const value instead of the identifier
+            return self.emit_expression(&const_value);
+        }
+
         // Check for reserved identifiers
         let ident_lower = ident.name.to_lowercase();
         let opcode = match ident_lower.as_str() {
@@ -1140,6 +1235,28 @@ impl BytecodeEmitter {
         op: crate::ast::expression::UnaryOp,
         expr: &Expression,
     ) -> Result<()> {
+        // Handle postfix increment/decrement specially
+        match op {
+            crate::ast::expression::UnaryOp::PostInc | crate::ast::expression::UnaryOp::PostDec => {
+                // For postfix inc/dec, we need to:
+                // 1. Emit the target expression (gets the current value on stack)
+                // 2. Copy it (so we keep the original value for the result)
+                // 3. Increment/decrement
+                // 4. Assign back to the target
+                self.emit_expression(expr)?;
+
+                let opcode = match op {
+                    crate::ast::expression::UnaryOp::PostInc => Opcode::OP_INC,
+                    crate::ast::expression::UnaryOp::PostDec => Opcode::OP_DEC,
+                    _ => unreachable!(),
+                };
+
+                self.emit(opcode);
+                return Ok(());
+            }
+            _ => {}
+        }
+
         let was_inline_cond = self.is_inline_conditional;
 
         let is_first_binary_expr = !self.is_inside_expression;
@@ -1171,6 +1288,7 @@ impl BytecodeEmitter {
             crate::ast::expression::UnaryOp::Negate => Opcode::OP_UNARYSUB,
             crate::ast::expression::UnaryOp::LogicalNot => Opcode::OP_NOT,
             crate::ast::expression::UnaryOp::BitwiseInvert => Opcode::OP_BWI,
+            _ => return Ok(()), // Skip unknown ops
         };
 
         if !self.last_op.is_boolean_returning() && op == crate::ast::expression::UnaryOp::LogicalNot {
@@ -1181,8 +1299,77 @@ impl BytecodeEmitter {
         Ok(())
     }
 
+    fn emit_in_expr(
+        &mut self,
+        value: &Expression,
+        container: &Expression,
+        upper_bound: Option<&Expression>,
+    ) -> Result<()> {
+        // Emit value
+        self.emit_expression(value)?;
+
+        // Emit container (or lower bound for range)
+        self.emit_expression(container)?;
+
+        if let Some(upper) = upper_bound {
+            // Range check: value in |lower, upper|
+            // Convert lower bound to number if needed
+            self.maybe_convert_to_number();
+
+            // Emit upper bound
+            self.emit_expression(upper)?;
+
+            // Convert upper bound to number if needed
+            self.maybe_convert_to_number();
+
+            // Emit OP_IN_RANGE
+            self.emit(Opcode::OP_IN_RANGE);
+        } else {
+            // Array/object membership check: value in array
+            // Convert container to object if needed
+            if !self.last_op.is_object_returning() {
+                self.emit(Opcode::OP_CONV_TO_OBJECT);
+            }
+
+            // Emit OP_IN_OBJ
+            self.emit(Opcode::OP_IN_OBJ);
+        }
+
+        Ok(())
+    }
+
+    fn emit_cast_expr(&mut self, expr: &Expression, target_type: crate::ast::expression::CastType) -> Result<()> {
+        // Emit the expression first
+        self.emit_expression(expr)?;
+
+        // Emit the appropriate cast opcode
+        match target_type {
+            crate::ast::expression::CastType::Integer => {
+                self.emit(Opcode::OP_INT);
+            }
+            crate::ast::expression::CastType::Float => {
+                self.emit(Opcode::OP_CONV_TO_FLOAT);
+            }
+        }
+
+        Ok(())
+    }
+
     fn emit_function_call(&mut self, target: &Expression, args: &[Expression]) -> Result<()> {
-        // Emit arguments first (left to right)
+        // Check if this is a built-in function call or method call
+        if let Expression::Identifier { identifier, .. } = target {
+            // Check for global built-in functions
+            if let Some(builtin) = BuiltInFunction::get_global(&identifier.name) {
+                return self.emit_builtin_function_call(builtin, args, None);
+            }
+        } else if let Expression::MemberAccess { object, property, .. } = target {
+            // Check for object method built-ins
+            if let Some(builtin) = BuiltInFunction::get_method(&property.name) {
+                return self.emit_builtin_function_call(builtin, args, Some(object.as_ref()));
+            }
+        }
+
+        // Regular function call - emit arguments first (left to right)
         for arg in args {
             self.emit_expression(arg)?;
         }
@@ -1201,6 +1388,107 @@ impl BytecodeEmitter {
         self.emit(Opcode::OP_INDEX_DEC);
 
         Ok(())
+    }
+
+    fn emit_builtin_function_call(
+        &mut self,
+        builtin: &BuiltInFunction,
+        args: &[Expression],
+        object: Option<&Expression>,
+    ) -> Result<()> {
+        // Emit object first if object_first flag is set
+        if builtin.flags.object_first {
+            if let Some(obj) = object {
+                self.emit_expression(obj)?;
+                // Convert object if needed
+                if let Some(conv_op) = builtin.convert_object_op {
+                    self.emit(conv_op);
+                }
+            } else {
+                // For global functions with object_first, use temp
+                self.emit(Opcode::OP_TEMP);
+            }
+        }
+
+        // Get parameter types from signature
+        let param_types: Vec<char> = builtin.param_types().take(args.len()).collect();
+
+        // Emit arguments with type conversions
+        if builtin.flags.use_array {
+            // Start array
+            self.emit(Opcode::OP_TYPE_ARRAY);
+
+            // Emit arguments (reversed if reverse_args is set)
+            let mut indexed_args: Vec<(usize, &Expression)> = args.iter().enumerate().collect();
+            if builtin.flags.reverse_args {
+                indexed_args.reverse();
+            }
+
+            for (idx, arg) in indexed_args {
+                self.emit_expression(arg)?;
+
+                // Apply type conversion based on signature
+                if idx < param_types.len() {
+                    self.emit_type_conversion(param_types[idx]);
+                }
+            }
+
+            // End array
+            self.emit(Opcode::OP_ARRAY_END);
+        } else {
+            // Emit arguments directly
+            let mut indexed_args: Vec<(usize, &Expression)> = args.iter().enumerate().collect();
+            if builtin.flags.reverse_args {
+                indexed_args.reverse();
+            }
+
+            for (idx, arg) in indexed_args {
+                self.emit_expression(arg)?;
+
+                // Apply type conversion based on signature
+                if idx < param_types.len() {
+                    self.emit_type_conversion(param_types[idx]);
+                }
+            }
+        }
+
+        // Emit object if not already emitted (for methods)
+        if !builtin.flags.object_first {
+            if let Some(obj) = object {
+                self.emit_expression(obj)?;
+                // Convert object if needed
+                if let Some(conv_op) = builtin.convert_object_op {
+                    self.emit(conv_op);
+                }
+            }
+        }
+
+        // Emit the built-in opcode
+        self.emit(builtin.opcode);
+
+        // Convert return value if needed
+        let return_type = builtin.return_type();
+        if return_type != '-' && return_type != 'x' {
+            self.emit_type_conversion(return_type);
+        }
+
+        // Pop unused return value if function doesn't return
+        if !builtin.flags.return_value && return_type == '-' {
+            self.emit(Opcode::OP_INDEX_DEC);
+        }
+
+        Ok(())
+    }
+
+    /// Emit a type conversion opcode based on the signature character
+    fn emit_type_conversion(&mut self, type_char: char) {
+        match type_char {
+            'f' => self.emit(Opcode::OP_CONV_TO_FLOAT),
+            's' => self.emit(Opcode::OP_CONV_TO_STRING),
+            'o' => self.emit(Opcode::OP_CONV_TO_OBJECT),
+            'x' | '-' => {} // No conversion needed
+            _ => {} // Unknown type, skip
+        }
     }
 
     fn emit_member_access(&mut self, object: &Expression, property: &Identifier) -> Result<()> {
@@ -1390,5 +1678,227 @@ impl BytecodeEmitter {
 impl Default for BytecodeEmitter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ==============================================================================
+// Built-in Function Definitions
+// ==============================================================================
+
+/// Command flags for built-in functions
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CmdFlags {
+    /// Pass arguments in an array
+    pub use_array: bool,
+    /// Reverse argument order
+    pub reverse_args: bool,
+    /// Function returns a value
+    pub return_value: bool,
+    /// Object comes first (for obj.func() calls)
+    pub object_first: bool,
+}
+
+impl CmdFlags {
+    pub const DEFAULT: Self = Self {
+        use_array: true,
+        reverse_args: true,
+        return_value: true,
+        object_first: false,
+    };
+
+    pub const DEFAULT_OBJ: Self = Self {
+        use_array: true,
+        reverse_args: true,
+        return_value: true,
+        object_first: false,
+    };
+
+    pub const NONE: Self = Self {
+        use_array: false,
+        reverse_args: false,
+        return_value: false,
+        object_first: false,
+    };
+}
+
+/// Built-in function definition
+#[derive(Debug, Clone)]
+pub struct BuiltInFunction {
+    pub name: &'static str,
+    pub opcode: Opcode,
+    pub convert_object_op: Option<Opcode>,
+    pub flags: CmdFlags,
+    /// Type signature: first char = return type, rest = param types
+    /// - '-' = discard (no return)
+    /// - 'x' = no conversion
+    /// - 'f' = convert to float
+    /// - 'o' = convert to object
+    /// - 's' = convert to string
+    pub signature: &'static str,
+}
+
+impl BuiltInFunction {
+    pub const fn new(name: &'static str, opcode: Opcode, flags: CmdFlags, signature: &'static str) -> Self {
+        Self {
+            name,
+            opcode,
+            convert_object_op: None,
+            flags,
+            signature,
+        }
+    }
+
+    pub const fn new_obj(name: &'static str, opcode: Opcode, convert_op: Option<Opcode>, flags: CmdFlags, signature: &'static str) -> Self {
+        Self {
+            name,
+            opcode,
+            convert_object_op: convert_op,
+            flags,
+            signature,
+        }
+    }
+
+    pub const GLOBAL_FUNCS: &'static [BuiltInFunction] = &[
+        BuiltInFunction {
+            name: "sleep",
+            opcode: Opcode::OP_SLEEP,
+            convert_object_op: None,
+            flags: CmdFlags::NONE,
+            signature: "-f",
+        },
+        BuiltInFunction::new("sin", Opcode::OP_SIN, CmdFlags::DEFAULT, "ff"),
+        BuiltInFunction::new("cos", Opcode::OP_COS, CmdFlags::DEFAULT, "ff"),
+        BuiltInFunction::new("arctan", Opcode::OP_ARCTAN, CmdFlags::DEFAULT, "ff"),
+        BuiltInFunction::new("vecx", Opcode::OP_VECX, CmdFlags::DEFAULT, "ff"),
+        BuiltInFunction::new("vecy", Opcode::OP_VECY, CmdFlags::DEFAULT, "ff"),
+        BuiltInFunction::new("abs", Opcode::OP_ABS, CmdFlags::DEFAULT, "ff"),
+        BuiltInFunction::new("exp", Opcode::OP_EXP, CmdFlags::DEFAULT, "ff"),
+        BuiltInFunction::new("log", Opcode::OP_LOG, CmdFlags::DEFAULT, "fff"),
+        BuiltInFunction::new("min", Opcode::OP_MIN, CmdFlags::DEFAULT, "fff"),
+        BuiltInFunction::new("max", Opcode::OP_MAX, CmdFlags::DEFAULT, "fff"),
+        BuiltInFunction::new("pow", Opcode::OP_POW, CmdFlags {
+            return_value: true,
+            use_array: true,
+            reverse_args: true,
+            object_first: false,
+        }, "fff"),
+        BuiltInFunction::new("random", Opcode::OP_RANDOM, CmdFlags::DEFAULT, "fff"),
+        BuiltInFunction::new("arraylen", Opcode::OP_OBJ_SIZE, CmdFlags::DEFAULT, "fo"),
+        BuiltInFunction::new("sarraylen", Opcode::OP_OBJ_SIZE, CmdFlags::DEFAULT, "fo"),
+        BuiltInFunction::new("setarray", Opcode::OP_SETARRAY, CmdFlags {
+            use_array: false,
+            reverse_args: false,
+            return_value: false,
+            object_first: true,
+        }, "-of"),
+        BuiltInFunction::new("getangle", Opcode::OP_GETANGLE, CmdFlags {
+            return_value: true,
+            use_array: true,
+            reverse_args: true,
+            object_first: false,
+        }, "fff"),
+        BuiltInFunction::new("getdir", Opcode::OP_GETDIR, CmdFlags {
+            return_value: true,
+            use_array: true,
+            reverse_args: true,
+            object_first: false,
+        }, "fff"),
+        BuiltInFunction::new("format", Opcode::OP_FORMAT, CmdFlags {
+            use_array: true,
+            reverse_args: true,
+            return_value: true,
+            object_first: false,
+        }, "xs"),
+        BuiltInFunction::new("makevar", Opcode::OP_MAKEVAR, CmdFlags::DEFAULT, "s"),
+        BuiltInFunction::new("waitfor", Opcode::OP_WAITFOR, CmdFlags {
+            use_array: false,
+            reverse_args: false,
+            return_value: true,
+            object_first: true,
+        }, "xssf"),
+    ];
+
+    pub const OBJ_METHODS: &'static [BuiltInFunction] = &[
+        BuiltInFunction::new_obj("index", Opcode::OP_OBJ_INDEX, Some(Opcode::OP_CONV_TO_OBJECT), CmdFlags {
+            use_array: false,
+            reverse_args: false,
+            return_value: true,
+            object_first: true,
+        }, "fx"),
+        BuiltInFunction::new_obj("type", Opcode::OP_OBJ_TYPE, None, CmdFlags::DEFAULT_OBJ, "-"),
+        BuiltInFunction::new_obj("indices", Opcode::OP_OBJ_INDICES, None, CmdFlags::DEFAULT_OBJ, "-"),
+        BuiltInFunction::new_obj("link", Opcode::OP_OBJ_LINK, None, CmdFlags::DEFAULT_OBJ, "-"),
+        BuiltInFunction::new_obj("trim", Opcode::OP_OBJ_TRIM, Some(Opcode::OP_CONV_TO_STRING), CmdFlags::DEFAULT_OBJ, "s"),
+        BuiltInFunction::new_obj("length", Opcode::OP_OBJ_LENGTH, Some(Opcode::OP_CONV_TO_STRING), CmdFlags::DEFAULT_OBJ, "f"),
+        BuiltInFunction::new_obj("pos", Opcode::OP_OBJ_POS, Some(Opcode::OP_CONV_TO_STRING), CmdFlags {
+            use_array: true,
+            reverse_args: true,
+            return_value: true,
+            object_first: true,
+        }, "fs"),
+        BuiltInFunction::new_obj("charat", Opcode::OP_OBJ_CHARAT, Some(Opcode::OP_CONV_TO_STRING), CmdFlags {
+            use_array: true,
+            reverse_args: true,
+            return_value: true,
+            object_first: true,
+        }, "sf"),
+        BuiltInFunction::new_obj("substring", Opcode::OP_OBJ_SUBSTR, Some(Opcode::OP_CONV_TO_STRING), CmdFlags::DEFAULT_OBJ, "sff"),
+        BuiltInFunction::new_obj("starts", Opcode::OP_OBJ_STARTS, Some(Opcode::OP_CONV_TO_STRING), CmdFlags::DEFAULT_OBJ, "-"),
+        BuiltInFunction::new_obj("ends", Opcode::OP_OBJ_ENDS, Some(Opcode::OP_CONV_TO_STRING), CmdFlags::DEFAULT_OBJ, "-"),
+        BuiltInFunction::new_obj("tokenize", Opcode::OP_OBJ_TOKENIZE, Some(Opcode::OP_CONV_TO_STRING), CmdFlags::DEFAULT_OBJ, "-"),
+        BuiltInFunction::new_obj("positions", Opcode::OP_OBJ_POSITIONS, Some(Opcode::OP_CONV_TO_STRING), CmdFlags::DEFAULT_OBJ, "os"),
+        BuiltInFunction::new_obj("size", Opcode::OP_OBJ_SIZE, Some(Opcode::OP_CONV_TO_OBJECT), CmdFlags::DEFAULT_OBJ, "-"),
+        BuiltInFunction::new_obj("subarray", Opcode::OP_OBJ_SUBARRAY, None, CmdFlags::DEFAULT_OBJ, "-"),
+        BuiltInFunction::new_obj("clear", Opcode::OP_OBJ_CLEAR, Some(Opcode::OP_CONV_TO_OBJECT), CmdFlags::NONE, "-"),
+        BuiltInFunction::new_obj("add", Opcode::OP_OBJ_ADDSTRING, Some(Opcode::OP_CONV_TO_OBJECT), CmdFlags {
+            use_array: true,
+            reverse_args: true,
+            return_value: true,
+            object_first: true,
+        }, "-"),
+        BuiltInFunction::new_obj("delete", Opcode::OP_OBJ_DELETESTRING, Some(Opcode::OP_CONV_TO_OBJECT), CmdFlags {
+            use_array: true,
+            reverse_args: true,
+            return_value: true,
+            object_first: true,
+        }, "-"),
+        BuiltInFunction::new_obj("insert", Opcode::OP_OBJ_INSERTSTRING, Some(Opcode::OP_CONV_TO_OBJECT), CmdFlags {
+            use_array: true,
+            reverse_args: true,
+            return_value: true,
+            object_first: true,
+        }, "-"),
+        BuiltInFunction::new_obj("remove", Opcode::OP_OBJ_REMOVESTRING, Some(Opcode::OP_CONV_TO_OBJECT), CmdFlags {
+            use_array: true,
+            reverse_args: true,
+            return_value: true,
+            object_first: true,
+        }, "-"),
+        BuiltInFunction::new_obj("replace", Opcode::OP_OBJ_REPLACESTRING, Some(Opcode::OP_CONV_TO_OBJECT), CmdFlags {
+            use_array: true,
+            reverse_args: true,
+            return_value: true,
+            object_first: true,
+        }, "-"),
+    ];
+
+    pub fn get_global(name: &str) -> Option<&'static BuiltInFunction> {
+        Self::GLOBAL_FUNCS.iter().find(|f| f.name == name)
+    }
+
+    pub fn get_method(name: &str) -> Option<&'static BuiltInFunction> {
+        Self::OBJ_METHODS.iter().find(|f| f.name == name)
+    }
+
+    pub fn is_builtin(name: &str) -> bool {
+        Self::get_global(name).is_some() || Self::get_method(name).is_some()
+    }
+
+    pub fn return_type(&self) -> char {
+        self.signature.chars().next().unwrap_or('-')
+    }
+
+    pub fn param_types(&self) -> impl Iterator<Item = char> + '_ {
+        self.signature.chars().skip(1).chain(std::iter::repeat('x'))
     }
 }

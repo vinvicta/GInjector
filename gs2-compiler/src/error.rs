@@ -40,6 +40,17 @@ pub enum CompileError {
     Io {
         message: String,
     },
+    ConstRedefinition {
+        name: String,
+        location: SourceLocation,
+    },
+    UndefinedConst {
+        name: String,
+        location: SourceLocation,
+    },
+    InvalidConstValue {
+        location: SourceLocation,
+    },
 }
 
 impl fmt::Display for CompileError {
@@ -61,6 +72,15 @@ impl fmt::Display for CompileError {
             CompileError::Io { message } => {
                 write!(f, "I/O error: {}", message)
             }
+            CompileError::ConstRedefinition { name, location } => {
+                write!(f, "Compiler error at {}: redefinition of const {}", location, name)
+            }
+            CompileError::UndefinedConst { name, location } => {
+                write!(f, "Compiler error at {}: undefined const {}", location, name)
+            }
+            CompileError::InvalidConstValue { location } => {
+                write!(f, "Compiler error at {}: const value must be a literal or reference to another const", location)
+            }
         }
     }
 }
@@ -75,6 +95,9 @@ impl CompileError {
             CompileError::Parse { location, .. } => Some(location),
             CompileError::Compiler { location, .. } => location.as_ref(),
             CompileError::Io { .. } => None,
+            CompileError::ConstRedefinition { location, .. } => Some(location),
+            CompileError::UndefinedConst { location, .. } => Some(location),
+            CompileError::InvalidConstValue { location } => Some(location),
         }
     }
 }

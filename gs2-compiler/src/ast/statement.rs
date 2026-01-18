@@ -91,6 +91,27 @@ pub enum Statement {
         body: Box<Statement>,
         location: SourceLocation,
     },
+
+    /// A const declaration: `const NAME = VALUE;`
+    Const {
+        name: Identifier,
+        value: Expression,
+        location: SourceLocation,
+    },
+
+    /// An enum declaration: `enum Name { MEMBER1, MEMBER2 = 5, ... }`
+    Enum {
+        name: Option<Identifier>,  // None for anonymous enums, Some(name) for named enums
+        members: Vec<EnumMember>,
+        location: SourceLocation,
+    },
+}
+
+/// An enum member with optional explicit value
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumMember {
+    pub name: Identifier,
+    pub value: Option<Expression>,  // None for auto-increment, Some(expr) for explicit value
 }
 
 impl Statement {
@@ -108,7 +129,9 @@ impl Statement {
             | Statement::Break { location, .. }
             | Statement::Continue { location, .. }
             | Statement::Return { location, .. }
-            | Statement::With { location, .. } => location,
+            | Statement::With { location, .. }
+            | Statement::Const { location, .. }
+            | Statement::Enum { location, .. } => location,
         }
     }
 
@@ -204,5 +227,10 @@ impl Statement {
     /// Create a return statement
     pub fn return_stmt(expr: Option<Expression>, location: SourceLocation) -> Self {
         Statement::Return { expr, location }
+    }
+
+    /// Create a const declaration
+    pub fn const_decl(name: Identifier, value: Expression, location: SourceLocation) -> Self {
+        Statement::Const { name, value, location }
     }
 }

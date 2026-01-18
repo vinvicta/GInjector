@@ -142,6 +142,14 @@ pub enum Token {
     KeywordDefault,
     #[token("new")]
     KeywordNew,
+    #[token("in")]
+    KeywordIn,
+    #[token("elseif")]
+    KeywordElseIf,
+    #[token("const")]
+    KeywordConst,
+    #[token("enum")]
+    KeywordEnum,
 
     // Literals
     #[regex(r"[0-9]+(\.[0-9]+)?", |lex| lex.slice().to_string())]

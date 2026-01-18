@@ -14,4 +14,4 @@ pub use identifier::Identifier;
 pub use literal::Literal;
 pub use postfix_suffix::PostfixSuffix;
 pub use program::Program;
-pub use statement::Statement;
+pub use statement::{EnumMember, Statement};
