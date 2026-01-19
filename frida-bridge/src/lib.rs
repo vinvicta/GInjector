@@ -20,7 +20,7 @@ impl ClientType {
     pub fn target_module(&self) -> &'static str {
         match self {
             ClientType::GraalWorlds => "Worlds.exe",
-            ClientType::EraSteam => "Era.exe",
+            ClientType::EraSteam => "Graal3DEngine.dll",
         }
     }
 
@@ -35,7 +35,7 @@ impl ClientType {
     pub fn tgralvar_constructor_offset(&self) -> usize {
         match self {
             ClientType::GraalWorlds => 0x9A340,
-            ClientType::EraSteam => 0x0, // Placeholder - needs to be found
+            ClientType::EraSteam => 0x0, // Era uses pattern scanning
         }
     }
 
@@ -43,7 +43,7 @@ impl ClientType {
     pub fn tgralvar_setscript_offset(&self) -> usize {
         match self {
             ClientType::GraalWorlds => 0x9EDE0,
-            ClientType::EraSteam => 0x0, // Placeholder - needs to be found
+            ClientType::EraSteam => 0x0, // Era uses pattern scanning
         }
     }
 
@@ -52,6 +52,32 @@ impl ClientType {
         match self {
             ClientType::GraalWorlds => false,
             ClientType::EraSteam => false, // Era uses fastcall/stdcall like Worlds
+        }
+    }
+
+    /// Whether this client requires pattern scanning by default
+    pub fn uses_pattern_scanning_by_default(&self) -> bool {
+        match self {
+            ClientType::GraalWorlds => false,
+            ClientType::EraSteam => true,
+        }
+    }
+
+    /// Default constructor pattern for this client
+    pub fn default_constructor_pattern(&self) -> Option<&'static str> {
+        match self {
+            ClientType::GraalWorlds => None,
+            // Pattern from era_steam_esphack.js for TGraalVar constructor
+            ClientType::EraSteam => Some("40 53 48 83 EC 20 48 8B D9 E8 ?? ?? ?? ?? 48 ?? ?? ?? ?? ?? ?? C7 ?? ?? ?? 00 00 00 48 ?? ?? ?? ?? ?? ?? ?? ?? 66 C7"),
+        }
+    }
+
+    /// Default SetScript pattern for this client
+    pub fn default_setscript_pattern(&self) -> Option<&'static str> {
+        match self {
+            ClientType::GraalWorlds => None,
+            // Pattern from era_steam_esphack.js for TGraalVar::SetScript
+            ClientType::EraSteam => Some("48 89 ?? ?? ?? 57 48 ?? ?? ?? 48 8B DA 48 8B F9 E8 ?? ?? ?? ?? ?? ?? ?? ?? 48 ?? ?? 48 ?? ?? ?? ?? 48 ?? ?? ?? 5F"),
         }
     }
 
@@ -191,7 +217,7 @@ impl FridaInjector {
         self.custom_offsets
             .as_ref()
             .map(|o| o.use_pattern_scanning)
-            .unwrap_or(false)
+            .unwrap_or_else(|| self.client_type.uses_pattern_scanning_by_default())
     }
 
     /// Get constructor pattern (if available)
@@ -199,6 +225,7 @@ impl FridaInjector {
         self.custom_offsets
             .as_ref()
             .and_then(|o| o.constructor_pattern.clone())
+            .or_else(|| self.client_type.default_constructor_pattern().map(|s| s.to_string()))
     }
 
     /// Get setscript pattern (if available)
@@ -206,6 +233,7 @@ impl FridaInjector {
         self.custom_offsets
             .as_ref()
             .and_then(|o| o.setscript_pattern.clone())
+            .or_else(|| self.client_type.default_setscript_pattern().map(|s| s.to_string()))
     }
 
     /// Get pattern index (defaults to 0)
@@ -304,9 +332,24 @@ impl FridaInjector {
 
         script.push_str("async function init() {\n");
         script.push_str("    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\n");
-        script.push_str(&format!("    var m = Process.findModuleByName(\"{}\");\n", module_name));
-        script.push_str("    var baseAddress = m.base;\n");
-        script.push_str("    console.log(\"Module base: \" + baseAddress);\n\n");
+
+        // For Era Steam, wait for Graal3DEngine.dll to load
+        if self.client_type == ClientType::EraSteam {
+            script.push_str(&format!("    // Wait for {} to load...\n", module_name));
+            script.push_str("    var m = null;\n");
+            script.push_str("    while (m === null) {\n");
+            script.push_str(&format!("        try {{ m = Module.load(\"{}\"); }} catch (e) {{\n", module_name));
+            script.push_str("            console.log(\"Waiting for module to load...\");\n");
+            script.push_str("            await sleep(1000);\n");
+            script.push_str("        }}\n");
+            script.push_str("    }\n");
+            script.push_str("    var baseAddress = m.base;\n");
+            script.push_str("    console.log(\"Module loaded at: \" + baseAddress);\n\n");
+        } else {
+            script.push_str(&format!("    var m = Process.findModuleByName(\"{}\");\n", module_name));
+            script.push_str("    var baseAddress = m.base;\n");
+            script.push_str("    console.log(\"Module base: \" + baseAddress);\n\n");
+        }
 
         // Pattern scanning or static offsets
         if use_pattern_scanning {
@@ -489,5 +532,30 @@ mod tests {
         assert!(script.contains("0x9EDE0"));
         assert!(!script.contains("thiscall"));
         assert!(!script.contains("157876074"));
+    }
+
+    #[test]
+    fn test_generate_injection_script_era_steam() {
+        let injector = FridaInjector::new(ClientType::EraSteam);
+        let script = injector.generate_injection_script("00 01 02", ".");
+
+        assert!(script.contains("Era (Steam)"));
+        assert!(script.contains("Graal3DEngine.dll"));
+        // Should use pattern scanning for Era Steam
+        assert!(script.contains("Memory.scanSync"));
+        assert!(script.contains("40 53 48 83 EC 20 48 8B D9"));
+        assert!(script.contains("48 89 ?? ?? ?? 57 48"));
+        // Should wait for module to load
+        assert!(script.contains("Waiting for module to load"));
+        assert!(script.contains("Module.load"));
+    }
+
+    #[test]
+    fn test_era_steam_default_patterns() {
+        let client = ClientType::EraSteam;
+        assert!(client.uses_pattern_scanning_by_default());
+        assert_eq!(client.target_module(), "Graal3DEngine.dll");
+        assert!(client.default_constructor_pattern().is_some());
+        assert!(client.default_setscript_pattern().is_some());
     }
 }
