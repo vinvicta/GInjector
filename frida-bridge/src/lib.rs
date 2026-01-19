@@ -338,11 +338,13 @@ impl FridaInjector {
             script.push_str(&format!("    // Wait for {} to load...\n", module_name));
             script.push_str("    var m = null;\n");
             script.push_str("    while (m === null) {\n");
-            script.push_str(&format!("        try {{ m = Module.load(\"{}\"); }} catch (e) {{\n", module_name));
+            script.push_str("        try {\n");
+            script.push_str(&format!("            m = Module.load(\"{}\");\n", module_name));
+            script.push_str("        } catch (e) {\n");
             script.push_str("            console.log(\"Waiting for module to load...\");\n");
             script.push_str("            await sleep(1000);\n");
-            script.push_str("        }}\n");
-            script.push_str("    }\n");
+            script.push_str("        }\n");  // Close catch block
+            script.push_str("    }\n");  // Close while loop
             script.push_str("    var baseAddress = m.base;\n");
             script.push_str("    console.log(\"Module loaded at: \" + baseAddress);\n\n");
         } else {
