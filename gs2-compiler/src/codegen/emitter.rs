@@ -242,6 +242,12 @@ pub struct BytecodeEmitter {
     is_inline_conditional: bool,
     is_inside_expression: bool,
     is_copy_assignment: bool,
+
+    // Current function parameters (for ConvertToFloat insertion)
+    current_function_params: Vec<String>,
+
+    // Context tracking for parameter float conversion
+    in_comparison_context: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -274,6 +280,8 @@ impl BytecodeEmitter {
             is_inline_conditional: true,
             is_inside_expression: false,
             is_copy_assignment: false,
+            current_function_params: Vec::new(),
+            in_comparison_context: false,
         };
         // Initialize exit_label address
         emitter.label_addr.insert(exit_label, 0);
@@ -615,8 +623,17 @@ impl BytecodeEmitter {
         self.emit(Opcode::OP_JMP);
         // TODO: Check if function has function calls for OP_CMD_CALL
 
+        // Store current parameters and set new ones for this function
+        let saved_params = std::mem::take(&mut self.current_function_params);
+        for param in params {
+            self.current_function_params.push(param.name.clone());
+        }
+
         // Emit function body
         self.emit_statement(body)?;
+
+        // Restore previous parameters
+        self.current_function_params = saved_params;
 
         // Emit return if last op wasn't RET
         if self.last_op != Opcode::OP_RET {
@@ -1041,9 +1058,19 @@ impl BytecodeEmitter {
         if let Some(op) = opcode {
             self.emit(op);
         } else {
+            // Check if this identifier is a function parameter AND we're in a comparison/arithmetic context
+            let is_param = self.current_function_params.contains(&ident.name);
+            let needs_float_conversion = is_param && self.in_comparison_context;
+
             let id = self.get_string_const(&ident.name);
             self.emit(Opcode::OP_TYPE_VAR);
             self.emit_dynamic_number_unsigned(id as u32);
+
+            // Official compiler adds ConvertToFloat after parameter references
+            // ONLY when used in comparison/arithmetic operations
+            if needs_float_conversion {
+                self.emit(Opcode::OP_CONV_TO_FLOAT);
+            }
         }
 
         Ok(())
@@ -1065,11 +1092,33 @@ impl BytecodeEmitter {
             return self.emit_assignment(left, op, right);
         }
 
+        // Check if this is a comparison or arithmetic operation that requires parameter float conversion
+        let requires_param_float = matches!(
+            op,
+            crate::ast::expression::BinaryOp::Equal
+                | crate::ast::expression::BinaryOp::NotEqual
+                | crate::ast::expression::BinaryOp::LessThan
+                | crate::ast::expression::BinaryOp::GreaterThan
+                | crate::ast::expression::BinaryOp::LessThanOrEqual
+                | crate::ast::expression::BinaryOp::GreaterThanOrEqual
+                | crate::ast::expression::BinaryOp::Add
+                | crate::ast::expression::BinaryOp::Subtract
+                | crate::ast::expression::BinaryOp::Multiply
+                | crate::ast::expression::BinaryOp::Divide
+                | crate::ast::expression::BinaryOp::Modulo
+                | crate::ast::expression::BinaryOp::Power
+        );
+
         // Regular binary operations
+        let saved_context = self.in_comparison_context;
+        self.in_comparison_context = requires_param_float;
+
         self.emit_expression(left)?;
         self.maybe_convert_to_number();
         self.emit_expression(right)?;
         self.maybe_convert_to_number();
+
+        self.in_comparison_context = saved_context;
 
         let opcode = match op {
             crate::ast::expression::BinaryOp::Add => Opcode::OP_ADD,
